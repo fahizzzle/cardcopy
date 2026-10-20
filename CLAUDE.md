@@ -18,6 +18,6 @@ Copies camera SD cards into `Raw Photo|Video|Audio\<Project>\Cam N` folders. Pyt
 - Git identity in this repo is the GitHub no-reply address (public history).
 
 ## Builds
-- Mac: `.github/workflows/build.yml` runs the tests on Windows and macOS, then `scripts/build_mac.sh` on macos-15: PyInstaller (`mac/CardCopy.spec`, Info.plist usage strings there) -> ad-hoc signed `CardCopy.app`, opened once with `CARDCOPY_SELFTEST` to prove it starts, then `CardCopy-mac.dmg` / `.zip` and screenshots as artifacts. Not notarized (no Developer ID yet).
+- Mac: `.github/workflows/build.yml` runs the tests on Windows and macOS, then `scripts/build_mac.sh` on macos-15: PyInstaller (`mac/CardCopy.spec`, Info.plist usage strings there) -> ad-hoc signed `CardCopy.app`, opened once with `CARDCOPY_SELFTEST` to prove it starts, then `CardCopy-Installer.pkg` (installs into /Applications), `CardCopy-mac.dmg` / `.zip` and screenshots. Pushes to `mac` replace the `mac-preview` pre-release (never "latest"). Not notarized (no Developer ID yet).
 - Windows: the release zip = embedded Python 3.11.9 + PySide6 + `cardcopy/` + `windows/` scripts. The original build/release scripts were not recovered; recreate them before the next Windows release. No PyInstaller/exe on Windows (Avast).
 - App icon: `mac/AppIcon.png` from `scripts/make_icon.py`; the build makes the .icns.

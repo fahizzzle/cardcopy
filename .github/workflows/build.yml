@@ -40,6 +40,7 @@ jobs:
         with:
           name: CardCopy-mac
           path: |
+            dist/CardCopy-Installer.pkg
             dist/CardCopy-mac.dmg
             dist/CardCopy-mac.zip
           if-no-files-found: error
@@ -70,9 +71,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release delete mac-preview --cleanup-tag --yes || true
-          gh release create mac-preview dist/CardCopy-mac.dmg dist/CardCopy-mac.zip \
+          gh release create mac-preview dist/CardCopy-Installer.pkg dist/CardCopy-mac.dmg dist/CardCopy-mac.zip \
             --prerelease --latest=false --target "$GITHUB_SHA" \
             --title "CardCopy for Mac (preview)" \
             --notes "Test build of the Mac version from the mac branch ($(echo "$GITHUB_SHA" | cut -c1-7)). Apple silicon, macOS 13 or later.
 
-          Open CardCopy-mac.dmg and drag CardCopy to Applications. The app is not notarized yet, so the first time macOS blocks it: open System Settings > Privacy & Security and choose Open Anyway."
+          Download CardCopy-Installer.pkg, open it and click Continue, then Install: CardCopy goes into Applications and Launchpad. (Or open CardCopy-mac.dmg and drag CardCopy onto Applications.)
+
+          It is not notarized yet, so macOS first says it cannot verify it: click Done, then open System Settings > Privacy & Security and choose Open Anyway."

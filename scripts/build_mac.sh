@@ -2,7 +2,8 @@
 # Build CardCopy for the Mac (Apple silicon), on a Mac. Run from anywhere; everything lands in dist/:
 #
 #   CardCopy.app          the app, ad-hoc signed
-#   CardCopy-mac.dmg      drag-to-Applications disk image (what people download)
+#   CardCopy-Installer.pkg  a regular installer that puts the app in Applications (what people download)
+#   CardCopy-mac.dmg      drag-to-Applications disk image
 #   CardCopy-mac.zip      the app zipped with ditto (keeps the bundle's links and permissions)
 #   screenshots/          the packaged app's own window, opened once to prove it starts, plus the
 #                         window on made-up cards in light and dark (scripts/screenshot.py)
@@ -49,6 +50,21 @@ fi
 echo "== screenshots on made-up cards"
 "$PYTHON" scripts/screenshot.py "$shots" --appearance both || echo "(screenshots failed; the app itself started)"
 
+echo "== installer package"
+# A classic installer (Continue, Install, password): puts CardCopy.app into /Applications. Not relocatable,
+# or Installer would "upgrade" a stray copy wherever it found one (Downloads, a mounted .dmg) instead.
+version="$("$PYTHON" -c 'import cardcopy; print(cardcopy.__version__)')"
+pkgroot=build/pkgroot
+rm -rf "$pkgroot" dist/CardCopy-Installer.pkg && mkdir -p "$pkgroot/Applications"
+ditto dist/CardCopy.app "$pkgroot/Applications/CardCopy.app"
+pkgbuild --analyze --root "$pkgroot" build/component.plist >/dev/null
+plutil -replace 0.BundleIsRelocatable -bool NO build/component.plist
+plutil -replace 0.BundleOverwriteAction -string upgrade build/component.plist
+pkgbuild --root "$pkgroot" --component-plist build/component.plist --identifier com.framedhorizon.cardcopy \
+  --version "$version" --install-location / build/CardCopy-component.pkg >/dev/null
+productbuild --package build/CardCopy-component.pkg --identifier com.framedhorizon.cardcopy.installer \
+  --version "$version" dist/CardCopy-Installer.pkg >/dev/null
+
 echo "== disk image and zip"
 stage=build/dmg
 rm -rf "$stage" dist/CardCopy-mac.dmg dist/CardCopy-mac.zip && mkdir -p "$stage"
@@ -56,5 +72,5 @@ cp -R dist/CardCopy.app "$stage/"
 ln -s /Applications "$stage/Applications"
 hdiutil create -volname CardCopy -srcfolder "$stage" -ov -format UDZO dist/CardCopy-mac.dmg >/dev/null
 ditto -c -k --keepParent dist/CardCopy.app dist/CardCopy-mac.zip
-shasum -a 256 dist/CardCopy-mac.dmg dist/CardCopy-mac.zip
-du -sh dist/CardCopy.app dist/CardCopy-mac.dmg
+shasum -a 256 dist/CardCopy-Installer.pkg dist/CardCopy-mac.dmg dist/CardCopy-mac.zip
+du -sh dist/CardCopy.app dist/CardCopy-Installer.pkg dist/CardCopy-mac.dmg
