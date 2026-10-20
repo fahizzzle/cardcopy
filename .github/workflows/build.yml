@@ -49,3 +49,30 @@ jobs:
           name: screenshots
           path: dist/screenshots/
           if-no-files-found: warn
+
+  mac-preview:
+    # A download link for trying the Mac app: the "mac-preview" pre-release, replaced on every push to mac.
+    # A pre-release is never "latest", so the update check of installed copies (Windows and Mac) ignores it.
+    name: Publish mac-preview
+    needs: mac-app
+    if: github.ref == 'refs/heads/mac' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: CardCopy-mac
+          path: dist
+      - name: Replace the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete mac-preview --cleanup-tag --yes || true
+          gh release create mac-preview dist/CardCopy-mac.dmg dist/CardCopy-mac.zip \
+            --prerelease --latest=false --target "$GITHUB_SHA" \
+            --title "CardCopy for Mac (preview)" \
+            --notes "Test build of the Mac version from the mac branch ($(echo "$GITHUB_SHA" | cut -c1-7)). Apple silicon, macOS 13 or later.
+
+          Open CardCopy-mac.dmg and drag CardCopy to Applications. The app is not notarized yet, so the first time macOS blocks it: open System Settings > Privacy & Security and choose Open Anyway."
