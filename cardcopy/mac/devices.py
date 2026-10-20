@@ -66,6 +66,21 @@ def _model(info: dict) -> str:
     return re.sub(r"\s+Media$", "", name, flags=re.I)
 
 
+def on_boot_disk(root: str) -> bool:
+    """Is this folder on the Mac's own disk (the system volume, or the Data volume beside it)?"""
+    try:
+        here = os.stat(root).st_dev
+    except OSError:
+        return False
+    for system in ("/", "/System/Volumes/Data"):
+        try:
+            if os.stat(system).st_dev == here:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def volume_from_info(root: str, info: dict) -> Volume:
     total = free = 0
     try:
@@ -73,10 +88,7 @@ def volume_from_info(root: str, info: dict) -> Volume:
         total, free = usage.total, usage.free
     except OSError:
         pass
-    try:
-        boot = os.stat(root).st_dev == os.stat("/").st_dev
-    except OSError:
-        boot = False
+    boot = on_boot_disk(root)
     removable = bool(info.get("RemovableMedia") or info.get("Removable"))
     return Volume(
         root=root, label=str(info.get("VolumeName") or os.path.basename(root)),

@@ -18,6 +18,17 @@ SD_CARD = {"VolumeName": "Untitled", "VolumeUUID": "0E2C1D5B-1111-2222-3333-4444
            "Ejectable": True, "MediaName": "Sony ILCE-7M4 Media", "BusProtocol": "USB", "VirtualOrPhysical": "Physical"}
 
 
+@pytest.fixture(autouse=True)
+def not_the_boot_disk(monkeypatch):
+    """tmp_path stands in for a card, but on a Mac it sits on the Mac's own disk, which is never a card."""
+    monkeypatch.setattr(mac_devices, "on_boot_disk", lambda root: False)
+
+
+def test_the_macs_own_disk_is_never_a_card(monkeypatch, tmp_path):
+    monkeypatch.setattr(mac_devices, "on_boot_disk", lambda root: True)
+    assert not mac_devices.is_card(mac_devices.volume_from_info(str(tmp_path), SD_CARD))
+
+
 def test_volume_from_diskutil(tmp_path):
     v = mac_devices.volume_from_info(str(tmp_path), SD_CARD)
     assert (v.label, v.drive_type, v.model, v.facts["whole"]) == ("Untitled", DRIVE_REMOVABLE, "Sony ILCE-7M4", "disk4")
