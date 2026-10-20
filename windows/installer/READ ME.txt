@@ -1,0 +1,32 @@
+CardCopy
+========
+Copies the photos and videos off camera SD cards into project folders
+(Raw Photo\<Project>\Cam 1 ..., Raw Video\<Project>\Cam 1 ...), for example on Google Drive.
+
+INSTALL
+  1. Unzip the whole download (right-click the zip > Extract All). Do not run it from inside the zip.
+  2. Double-click  Install.cmd  and press Enter.
+     If Windows shows "Windows protected your PC", choose More info > Run anyway:
+     it is a plain script you can open in Notepad, not a program.
+  3. Open CardCopy from the Start Menu or the Desktop.
+  Needs Windows 10 or 11 (64-bit). No admin rights, nothing else to install.
+  Installing a newer version over an old one keeps your settings.
+
+FIRST RUN
+  - "Raw folder": press Browse and pick the folder that holds (or should hold) Raw Photo and Raw Video.
+  - Cameras: set USB Connection Mode to Mass Storage, then plug them in. Or put the cards in readers
+    and switch to "SD cards" in the sidebar.
+  - Tick the cards, check "What will be created", press "Create folders + copy cards".
+
+SAFETY
+  CardCopy never deletes and never overwrites anything, on the cards or at the destination.
+  Cards are only read. A cancelled copy continues where it stopped the next time.
+
+UNINSTALL
+  Settings > Apps > CardCopy > Uninstall. Only the program is removed; photos, videos,
+  project folders and your settings are left alone.
+
+WHAT IS IN THE FOLDER
+  python\    the official Python 3.11 runtime from python.org, with Qt (PySide6) for the window
+  cardcopy\  the program itself, as readable .py files
+  Cameras are shown with drawn icons (photo or video camera); "Picture" on a camera lets you use your own photo of it.
