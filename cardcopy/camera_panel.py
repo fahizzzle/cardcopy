@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from .cameras import Camera, Card
 from .identify import CopyOptions
 from .progress import human          # still importable from here: ui.py and the tests use it
-from .glass import ACCENT, GREEN, TEXT, TEXT_SOFT, Panel, Toggle
+from .theme import STYLE, Check, Panel, ink
 from .structure import cam_folder
 
 PICTURE_W, PICTURE_H = 132, 96
@@ -116,19 +116,19 @@ class CardOption(Panel):
         super().__init__(radius=16)
         self.key = card.key
         self.setCursor(Qt.PointingHandCursor)
-        self.check = Toggle()
-        self.check.setStyleSheet("font-weight: 600;")
+        self.check = Check()
+        self.check.setStyleSheet(STYLE["bold"])
         self.check.setChecked(checked)
         self.count = QLabel()                     # "1,284 files · 58.2 GB"
-        self.count.setStyleSheet(f"color: {TEXT}; font-size: 11pt; font-weight: 600;")
+        self.count.setStyleSheet(STYLE["count"])
         self.count.setWordWrap(True)             # two cards side by side leave little width
         self.contents = QLabel()
         self.contents.setWordWrap(True)
         self.contents.setTextFormat(Qt.RichText)
-        self.contents.setStyleSheet(f"color: {TEXT_SOFT};")
+        self.contents.setStyleSheet(STYLE["detail"])
         self.status = QLabel()
         self.status.setWordWrap(True)
-        self.status.setStyleSheet(f"color: {GREEN}; font-weight: 600;")
+        self.status.setStyleSheet(STYLE["status"])
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 10, 16, 12)
         lay.setSpacing(1)
@@ -177,8 +177,7 @@ class CardOption(Panel):
             # so the only coral on screen belongs to cards that really are being copied
             self.check.set_muted(bool(kind_off))
             self._apply_enabled()        # nothing to tick or untick while its kind is off
-            self.count.setStyleSheet(f"color: {TEXT_SOFT if kind_off else TEXT}; "
-                                     "font-size: 11pt; font-weight: 600;")
+            self.count.setStyleSheet(STYLE["count_off" if kind_off else "count"])
             self._restyle()
         v, info = card.volume, card.info
         where = f"{v.letter}" if v.letter else "folder"
@@ -208,7 +207,7 @@ class CardOption(Panel):
                 copied.append(f"{count:,} {label}  ·  {human(nbytes)}")
             elif count:
                 left.append(f"{count:,} {label}")
-        rows = [f"<span style='color:{TEXT}'>{row}</span>" for row in copied]
+        rows = [f"<span style='color:{ink()}'>{row}</span>" for row in copied]
         if left:
             rows.append("Not copied: " + ", ".join(left))
         if not (copied or left):
@@ -234,10 +233,7 @@ def _link(text: str) -> QPushButton:
     button = QPushButton(text)
     button.setFlat(True)
     button.setCursor(Qt.PointingHandCursor)
-    button.setStyleSheet(
-        f"QPushButton {{ border: none; background: transparent; color: {TEXT_SOFT}; padding: 0;"
-        f" text-decoration: underline; }} QPushButton:hover {{ color: {ACCENT.name()}; }}"
-        f" QPushButton:disabled {{ color: rgba(255,255,255,0.25); }}")
+    button.setStyleSheet(STYLE["link"])
     return button
 
 
@@ -269,9 +265,9 @@ class CameraPanel(Panel):
         tile_lay.addWidget(self.picture)
 
         name = QLabel(cam.name)
-        name.setStyleSheet(f"color: {TEXT}; font-size: 13pt; font-weight: 600;")
+        name.setStyleSheet(STYLE["camera_name"])
         sub = QLabel(cam.default_name if cam.name != cam.default_name else cam.model)
-        sub.setStyleSheet(f"color: {TEXT_SOFT};")
+        sub.setStyleSheet(STYLE["soft"])
         self.combo = QComboBox()
         self.combo.addItems([cam_folder(n) for n in range(1, cam_count + 1)])
         self.combo.setCurrentIndex(cam_number - 1)

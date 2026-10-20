@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTime, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QFont, QIcon
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QComboBox, QDialog, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
     QMessageBox, QPlainTextEdit, QScrollArea, QSpinBox, QTimeEdit, QVBoxLayout, QWidget)
@@ -21,8 +22,9 @@ from .copier import Claims, CopyResult, copy_files
 from .devices import drive_mask, eject_volume, find_cards, folder_volume
 from .identify import CopyOptions, identify, scan
 from .progress import Progress
-from .glass import (ASSETS, TEXT_SOFT, Backdrop, LineEdit, Logo, NavButton, Panel, PillButton, ProgressBar, Sidebar,
-                    TitleStrip, Toggle, app_stylesheet, enable_blur_behind, heading, hit_test_border, nav_caption, well_text)
+from .theme import (ASSETS, COMPUTER, FILE_MANAGER, MAC, STYLE, ActionButton, Backdrop, Check, LineEdit, Logo, NavButton,
+                    Panel, PillButton, ProgressBar, Sidebar, TitleStrip, Toggle, after_first_show, heading,
+                    hit_test_border, install, mono_font, nav_caption, progress_badge, setup_window, well_text)
 from .structure import (KINDS, Plan, build_plan, cam_folder, copy_jobs, create_folders, overlapping,
                         project_path, spill_path)
 
@@ -42,7 +44,7 @@ def render_plan(plan: Plan, base: str, notes: dict[str, list[str]]) -> str:
         for name, child in node.items():
             full = os.path.join(path, name)
             note = "; ".join(notes.get(full.lower(), []))
-            lines.append(f"{'    ' * depth}{name}\\{('   <-- ' + note) if note else ''}")
+            lines.append(f"{'    ' * depth}{name}{os.sep}{('   <-- ' + note) if note else ''}")
             walk(child, full, depth + 1)
 
     walk(tree, base, 0)
@@ -62,6 +64,7 @@ class Signals(QObject):
     update_found = Signal(object)
     update_progress = Signal(int, int)
     update_ready = Signal(object)
+    shutdown_allowed = Signal(bool, str)
     log = Signal(str)
 
 
@@ -69,12 +72,14 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("CardCopy")
-        self.setAttribute(Qt.WA_TranslucentBackground)   # the workspace is glass over the desktop
-        # frameless: Windows smears the native caption once blur-behind is on, so glass.TitleStrip replaces it
-        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowMinMaxButtonsHint)
-        self._blur_tried = False
+        setup_window(self)          # Windows: frameless glass; Mac: native frame, content under the title bar
+        self._first_show_done = False
         area = QApplication.primaryScreen().availableGeometry()
-        self.resize(min(1420, area.width() - 40), min(1000, area.height() - 50))
+        if MAC:
+            self.resize(min(1320, area.width() - 80), min(900, area.height() - 60))
+            self.setMinimumSize(980, 640)
+        else:
+            self.resize(min(1420, area.width() - 40), min(1000, area.height() - 50))
         self.settings = settings_mod.load()
         self.signals = Signals()
         self.cards: list[Card] = []
@@ -105,6 +110,7 @@ class MainWindow(QMainWindow):
         self.run_progress: Progress | None = None    # speed and time left for the run in hand
         self.card_progress: dict[str, Progress] = {}  # the same, per card, for its own tile
         self.spilled_to = ""                     # set once a run overflows into the backup folder
+        self._badge: int | None = None           # the percentage last put on the Dock icon
         self._spill_lock = threading.Lock()      # several card threads can hit "full" at the same moment
         self.shut_down_pc = power.shut_down_pc   # replaced in tests
         self.keep_awake = power.keep_awake       # replaced in tests
@@ -127,7 +133,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ UI
 
     def _build(self) -> None:
-        # ---- sidebar: the two views, and the things you do to the card list
+        self._make_widgets()
+        if MAC:
+            from . import mac_window             # the Mac arrangement: toolbar, translucent sidebar, menus
+            mac_window.arrange(self)
+        else:
+            self._arrange()
+
+    def _make_widgets(self) -> None:
+        """Every control the window has. Where each one goes is up to the look (_arrange, or mac_window)."""
+        # ---- the two views, and the things you do to the card list
         self.mode_cameras_btn = NavButton("Devices", "camera", checkable=True)
         self.mode_cameras_btn.setToolTip("Cameras and recorders, each with its own cards grouped underneath it")
         self.mode_cards_btn = NavButton("SD cards", "card", checkable=True)
@@ -135,10 +150,10 @@ class MainWindow(QMainWindow):
         self.mode_group = QButtonGroup(self)
         self.mode_group.addButton(self.mode_cameras_btn)
         self.mode_group.addButton(self.mode_cards_btn)
-        self.refresh_btn = NavButton("Refresh", "refresh")
-        self.add_folder_btn = NavButton("Add folder", "folder")
-        self.eject_btn = NavButton("Eject cards", "eject")
-        self.eject_btn.setToolTip("Safely remove every connected card (what Eject does in Explorer), then unplug")
+        self.refresh_btn = ActionButton("Refresh", "refresh")
+        self.add_folder_btn = ActionButton("Add folder", "folder")
+        self.eject_btn = ActionButton("Eject cards", "eject")
+        self.eject_btn.setToolTip(f"Safely remove every connected card (what Eject does in {FILE_MANAGER}), then unplug")
         self.add_folder_btn.setToolTip("Use a normal folder as a source (a card copied earlier, a reader that was not detected)")
         self.open_raw_btn = NavButton("Raw folder", "folder")
         self.open_photo_btn = NavButton("Raw Photo", "image")
@@ -149,77 +164,34 @@ class MainWindow(QMainWindow):
         self.open_project_audio_btn = NavButton("Project audio", "audio")
         self.scan_label = QLabel("")
         self.scan_label.setWordWrap(True)
-        self.scan_label.setStyleSheet("color: rgba(255,255,255,0.45); padding: 0 6px;")
-        side = QVBoxLayout()
-        side.setContentsMargins(18, 18, 14, 14)
-        side.setSpacing(2)
-        side.addWidget(Logo("CardCopy"))
-        side.addWidget(nav_caption("Copy from"))
-        side.addWidget(self.mode_cameras_btn)
-        side.addWidget(self.mode_cards_btn)
-        side.addWidget(nav_caption("Sources"))
-        side.addWidget(self.refresh_btn)
-        side.addWidget(self.add_folder_btn)
-        side.addWidget(self.eject_btn)
-        side.addWidget(nav_caption("Open"))
-        for button in (self.open_raw_btn, self.open_photo_btn, self.open_video_btn, self.open_audio_btn):
-            side.addWidget(button)
-        side.addWidget(nav_caption("This project"))
-        side.addWidget(self.open_project_photo_btn)
-        side.addWidget(self.open_project_video_btn)
-        side.addWidget(self.open_project_audio_btn)
+        self.scan_label.setStyleSheet(STYLE["scan"])
         self.receipt_check = Toggle("Offload receipt")
         self.receipt_check.setToolTip("Save a text file in the project folder listing every file: where it went, its size, "
                                       "copied / already there / error, and its checksum when Verify is on")
         self.eject_check = Toggle("Eject cards")
         self.eject_check.setToolTip("Eject the cards as soon as a copy finishes without errors (and before an automatic shutdown)")
-        after = QVBoxLayout()
-        after.setContentsMargins(6, 2, 0, 2)
-        after.setSpacing(4)
-        after.addWidget(self.receipt_check)
-        after.addWidget(self.eject_check)
-        side.addWidget(nav_caption("After copying"))
-        side.addLayout(after)
         self.update_check = Toggle("Check for updates")
         self.update_check.setToolTip("On launch, look up whether a newer CardCopy exists. Nothing is downloaded or installed by itself.")
-        app_box = QVBoxLayout()
-        app_box.setContentsMargins(6, 2, 0, 2)
-        app_box.addWidget(self.update_check)
-        side.addWidget(nav_caption("CardCopy " + __version__))
-        side.addLayout(app_box)
-        side.addStretch(1)
-        side.addWidget(self.scan_label)
-        sidebar = Sidebar()
-        sidebar.setLayout(side)
-        sidebar.setFixedWidth(216)
 
-        # ---- project panel
-        self.all_check = Toggle("All")
-        self.photo_check = Toggle("Photo")
-        self.video_check = Toggle("Video")
-        self.audio_check = Toggle("Audio")
+        # ---- project
+        self.all_check = Check("All")
+        self.photo_check = Check("Photo")
+        self.video_check = Check("Video")
+        self.audio_check = Check("Audio")
         self.audio_check.setToolTip("Field recorders (Zoom, Tascam, Sound Devices ...). Ticks itself when a "
                                     "recorder's card is plugged in; its recordings go to the Raw Audio folder.")
-        kinds_row = QHBoxLayout()
-        kinds_row.setSpacing(16)
-        for w in (self.all_check, self.photo_check, self.video_check, self.audio_check):
-            kinds_row.addWidget(w)
-        kinds_row.addStretch(1)
         self.project_edit = LineEdit()
         self.project_edit.setPlaceholderText("e.g. Nour")
         self.project_edit.setToolTip("The folder made inside Raw Photo / Raw Video / Raw Audio.\n"
-                                     "A / nests it: Rasheda/Reception makes Rasheda\\Reception.")
+                                     f"A / nests it: Rasheda/Reception makes Rasheda{os.sep}Reception.")
         self.base_edit = LineEdit()
         self.base_btn = PillButton("Browse", small=True)
-        base_row = QHBoxLayout()
-        base_row.setSpacing(4)
-        base_row.addWidget(self.base_edit)
-        base_row.addWidget(self.base_btn)
         self.spill_check = Toggle("Use a backup folder when this one fills up")
         self.spill_check.setToolTip("Off: a full destination pauses the copy until there is room again.\n"
                                     "On: the copy carries on in the backup folder instead and never waits.")
         self.spill_edit = LineEdit()
-        self.spill_edit.setPlaceholderText("e.g. D:\\Overflow        another drive with room")
+        self.spill_edit.setPlaceholderText("e.g. /Volumes/Backup/Overflow        another disk with room" if MAC
+                                           else "e.g. D:\\Overflow        another drive with room")
         self.spill_btn = PillButton("Browse", small=True)
         self.spill_row = QWidget()          # one widget, so hiding it collapses the row completely
         spill_row = QHBoxLayout(self.spill_row)
@@ -227,16 +199,10 @@ class MainWindow(QMainWindow):
         spill_row.setSpacing(4)
         spill_row.addWidget(self.spill_edit)
         spill_row.addWidget(self.spill_btn)
-        spill_box = QVBoxLayout()
-        spill_box.setSpacing(4)
-        spill_box.addWidget(self.spill_check)
-        spill_box.addWidget(self.spill_row)
         # One Cam count per Raw folder: three photo bodies and two video ones want Cam 1-3 in Raw Photo
         # and Cam 1-2 in Raw Video. "auto" (0) means one per connected camera of that kind.
         self.cam_spins: dict[str, QSpinBox] = {}
         self.cam_labels: dict[str, QLabel] = {}
-        cams_row = QHBoxLayout()
-        cams_row.setSpacing(6)
         for kind in KINDS:
             spin = QSpinBox()
             spin.setRange(0, 12)
@@ -245,52 +211,16 @@ class MainWindow(QMainWindow):
             spin.setToolTip(f"How many Cam folders to make in the {kind} Raw folder.\n"
                             f"auto = one for each {kind} device plugged in.")
             label = QLabel(kind.capitalize())
-            label.setStyleSheet(f"color: {TEXT_SOFT};")
-            cams_row.addWidget(label)
-            cams_row.addWidget(spin)
-            cams_row.addSpacing(10)
+            label.setStyleSheet(STYLE["soft"])
             self.cam_spins[kind], self.cam_labels[kind] = spin, label
-        cams_row.addStretch(1)
-        form = QFormLayout()
-        form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(8)
-        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.jpeg_check = Toggle("JPG / HEIF photos")
+        self.jpeg_check = Check("JPG / HEIF photos")
         self.jpeg_check.setToolTip("Off: only RAW files (ARW, CR3, NEF, DNG ...) are copied from the photos")
-        self.xml_check = Toggle("Clip XML files")
+        self.xml_check = Check("Clip XML files")
         self.xml_check.setToolTip("Off: only the video files are copied. On: also the XML metadata file Sony writes beside each clip")
-        extras_row = QHBoxLayout()
-        extras_row.setSpacing(16)
-        extras_row.addWidget(self.jpeg_check)
-        extras_row.addWidget(self.xml_check)
-        extras_row.addStretch(1)
-        for label, row in (("Project name", self.project_edit), ("Raw folder", base_row),
-                           ("Uploading", kinds_row), ("Cam folders", cams_row),
-                           ("Also copy", extras_row), ("When full", spill_box)):
-            caption = QLabel(label)
-            caption.setStyleSheet(f"color: {TEXT_SOFT};")
-            form.addRow(caption, row)
         self.preview = QPlainTextEdit()
         self.preview.setReadOnly(True)
-        self.preview.setFont(QFont("Consolas", 10))
+        self.preview.setFont(mono_font(10))
         self.preview.setLineWrapMode(QPlainTextEdit.NoWrap)
-        preview_well = well_text(self.preview)
-
-        project_tile = Panel(radius=20)
-        pv = QHBoxLayout(project_tile)
-        pv.setContentsMargins(22, 12, 22, 14)
-        pv.setSpacing(26)
-        form_side = QVBoxLayout()
-        form_side.addLayout(form)
-        form_side.addStretch(1)
-        preview_side = QVBoxLayout()
-        preview_side.setSpacing(6)
-        created = QLabel("What will be created")
-        created.setStyleSheet(f"color: {TEXT_SOFT};")
-        preview_side.addWidget(created)
-        preview_side.addWidget(preview_well, 1)
-        pv.addLayout(form_side, 3)
-        pv.addLayout(preview_side, 4)
 
         # ---- cameras / cards
         self.camera_list = QGridLayout()          # two per row
@@ -318,7 +248,7 @@ class MainWindow(QMainWindow):
         self.copy_btn.setDefault(True)
         self.cancel_btn = PillButton("Cancel")
         self.cancel_btn.setEnabled(False)
-        self.shutdown_check = Toggle("Shut down PC")
+        self.shutdown_check = Toggle(f"Shut down {COMPUTER}")
         self.shutdown_check.setToolTip("Always off when CardCopy starts. A 60 second countdown with a Cancel button comes first.")
         self.shutdown_mode = QComboBox()
         for label, mode in (("when copying finishes", "copy"), ("when Google Drive has finished syncing", "drive"),
@@ -332,31 +262,125 @@ class MainWindow(QMainWindow):
         self.shutdown_at.setDisplayFormat("h:mm AP")
         self.shutdown_at.setFixedWidth(110)
         self.shutdown_status = QLabel("")
-        self.shutdown_status.setStyleSheet(f"color: {TEXT_SOFT};")
+        self.shutdown_status.setStyleSheet(STYLE["soft"])
+        self.empty_check = Toggle("Show empty cards")
+        self.empty_note = QLabel("")
+        self.empty_note.setStyleSheet(STYLE["soft"])
+        self.bar = ProgressBar()
+        self.bar.setRange(0, 1000)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(5000)
+        self.workspace = Backdrop()
+        self.sidebar = Sidebar()
+
+    def _arrange(self) -> None:
+        """The Windows window: dark sidebar, glass workspace with its own caption strip."""
+        side = QVBoxLayout()
+        side.setContentsMargins(18, 18, 14, 14)
+        side.setSpacing(2)
+        side.addWidget(Logo("CardCopy"))
+        side.addWidget(nav_caption("Copy from"))
+        side.addWidget(self.mode_cameras_btn)
+        side.addWidget(self.mode_cards_btn)
+        side.addWidget(nav_caption("Sources"))
+        side.addWidget(self.refresh_btn)
+        side.addWidget(self.add_folder_btn)
+        side.addWidget(self.eject_btn)
+        side.addWidget(nav_caption("Open"))
+        for button in (self.open_raw_btn, self.open_photo_btn, self.open_video_btn, self.open_audio_btn):
+            side.addWidget(button)
+        side.addWidget(nav_caption("This project"))
+        side.addWidget(self.open_project_photo_btn)
+        side.addWidget(self.open_project_video_btn)
+        side.addWidget(self.open_project_audio_btn)
+        after = QVBoxLayout()
+        after.setContentsMargins(6, 2, 0, 2)
+        after.setSpacing(4)
+        after.addWidget(self.receipt_check)
+        after.addWidget(self.eject_check)
+        side.addWidget(nav_caption("After copying"))
+        side.addLayout(after)
+        app_box = QVBoxLayout()
+        app_box.setContentsMargins(6, 2, 0, 2)
+        app_box.addWidget(self.update_check)
+        side.addWidget(nav_caption("CardCopy " + __version__))
+        side.addLayout(app_box)
+        side.addStretch(1)
+        side.addWidget(self.scan_label)
+        self.sidebar.setLayout(side)
+        self.sidebar.setFixedWidth(216)
+
+        # ---- project panel
+        kinds_row = QHBoxLayout()
+        kinds_row.setSpacing(16)
+        for w in (self.all_check, self.photo_check, self.video_check, self.audio_check):
+            kinds_row.addWidget(w)
+        kinds_row.addStretch(1)
+        base_row = QHBoxLayout()
+        base_row.setSpacing(4)
+        base_row.addWidget(self.base_edit)
+        base_row.addWidget(self.base_btn)
+        spill_box = QVBoxLayout()
+        spill_box.setSpacing(4)
+        spill_box.addWidget(self.spill_check)
+        spill_box.addWidget(self.spill_row)
+        cams_row = QHBoxLayout()
+        cams_row.setSpacing(6)
+        for kind in KINDS:
+            cams_row.addWidget(self.cam_labels[kind])
+            cams_row.addWidget(self.cam_spins[kind])
+            cams_row.addSpacing(10)
+        cams_row.addStretch(1)
+        form = QFormLayout()
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(8)
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        extras_row = QHBoxLayout()
+        extras_row.setSpacing(16)
+        extras_row.addWidget(self.jpeg_check)
+        extras_row.addWidget(self.xml_check)
+        extras_row.addStretch(1)
+        for label, row in (("Project name", self.project_edit), ("Raw folder", base_row),
+                           ("Uploading", kinds_row), ("Cam folders", cams_row),
+                           ("Also copy", extras_row), ("When full", spill_box)):
+            caption = QLabel(label)
+            caption.setStyleSheet(STYLE["soft"])
+            form.addRow(caption, row)
+        preview_well = well_text(self.preview)
+
+        project_tile = Panel(radius=20)
+        pv = QHBoxLayout(project_tile)
+        pv.setContentsMargins(22, 12, 22, 14)
+        pv.setSpacing(26)
+        form_side = QVBoxLayout()
+        form_side.addLayout(form)
+        form_side.addStretch(1)
+        preview_side = QVBoxLayout()
+        preview_side.setSpacing(6)
+        created = QLabel("What will be created")
+        created.setStyleSheet(STYLE["soft"])
+        preview_side.addWidget(created)
+        preview_side.addWidget(preview_well, 1)
+        pv.addLayout(form_side, 3)
+        pv.addLayout(preview_side, 4)
+
+        # ---- actions
         power_row = QHBoxLayout()
         power_row.setSpacing(10)
         for w in (self.shutdown_check, self.shutdown_mode, self.shutdown_minutes, self.shutdown_at):
             power_row.addWidget(w)
         power_row.addWidget(self.shutdown_status, 1)
-        self.empty_check = Toggle("Show empty cards")
-        self.empty_note = QLabel("")
-        self.empty_note.setStyleSheet(f"color: {TEXT_SOFT};")
         actions = QHBoxLayout()
         actions.setSpacing(2)
         actions.addWidget(self.verify_check)
         actions.addStretch(1)
         for w in (self.missing_btn, self.folders_btn, self.cancel_btn, self.copy_btn):
             actions.addWidget(w)
-        self.bar = ProgressBar()
-        self.bar.setRange(0, 1000)
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(5000)
         log_well = well_text(self.log)
         log_well.setFixedHeight(62)
 
-        self.workspace = workspace = Backdrop()
-        lv = QVBoxLayout(workspace)
+        lv = QVBoxLayout(self.workspace)
         lv.setContentsMargins(30, 0, 0, 14)
         lv.setSpacing(6)
         lv.addWidget(TitleStrip())
@@ -386,8 +410,8 @@ class MainWindow(QMainWindow):
         root = QHBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(sidebar)
-        root.addWidget(workspace, 1)
+        root.addWidget(self.sidebar)
+        root.addWidget(self.workspace, 1)
         self.setCentralWidget(central)
 
     def _connect(self) -> None:
@@ -428,6 +452,8 @@ class MainWindow(QMainWindow):
         self.jpeg_check.toggled.connect(self._on_options_changed)
         self.empty_check.toggled.connect(self._on_show_empty_changed)
         self.shutdown_check.toggled.connect(self._on_shutdown_changed)
+        self.shutdown_check.toggled.connect(self._ask_shutdown_permission)
+        s.shutdown_allowed.connect(self._on_shutdown_allowed)
         self.shutdown_mode.currentIndexChanged.connect(self._on_shutdown_changed)
         self.shutdown_minutes.valueChanged.connect(self._on_shutdown_changed)
         self.shutdown_at.timeChanged.connect(self._on_shutdown_changed)
@@ -742,7 +768,7 @@ class MainWindow(QMainWindow):
         if not self.view:
             empty = QLabel("No devices found yet.\nSet each camera's USB mode to Mass Storage and plug it in "
                            "(recorders and card readers just appear); it will show up here by itself.")
-            empty.setStyleSheet(f"color: {TEXT_SOFT}; padding: 30px;")
+            empty.setStyleSheet(STYLE["empty"])
             self.camera_list.addWidget(empty, 0, 0, 1, 2)
         self.camera_list.setRowStretch((len(self.view) + 1) // 2 + 1, 1)   # pack rows to the top
         self._flow_cameras(force=True)
@@ -954,7 +980,7 @@ class MainWindow(QMainWindow):
         if self._spill_base():
             spare, spare_drive = gdrive.effective_free_space(self._spill_base())
             text += (f"\n\nIf this folder fills up, the rest goes to\n    {self._spill_base()}"
-                     f"   ({human(spare)} free on {spare_drive})\nin the same Raw ... \\project\\Cam layout.")
+                     f"   ({human(spare)} free on {spare_drive})\nin the same Raw ... {os.sep}project{os.sep}Cam layout.")
         self.preview.setPlainText(text)
 
     def _open_targets(self) -> dict:
@@ -1014,9 +1040,8 @@ class MainWindow(QMainWindow):
                                                       "room, and one folder inside the other runs out at the very "
                                                       "same moment.")
                 return
-            if os.path.splitdrive(os.path.abspath(spill))[0].lower() == \
-                    os.path.splitdrive(os.path.abspath(base))[0].lower():
-                drive = os.path.splitdrive(os.path.abspath(base))[0] or "that drive"
+            if gdrive.same_volume(spill, base):
+                drive = gdrive.volume_name(base)
                 if QMessageBox.question(
                         self, "CardCopy",
                         f"The backup folder is on {drive}, the same drive as the Raw folder.\n\n"
@@ -1079,7 +1104,7 @@ class MainWindow(QMainWindow):
                 jobs.append((card, files))
                 self.run_info[card.key] = (card.volume.root, cam.name, card.slot,
                                            plan.dest(kind, self._cam_for(card, cam)), len(files))
-                self._log(f"{card.volume.root} ({cam.name} {card.slot}) -> {self.settings['kind_folders'][kind]}\\"
+                self._log(f"{card.volume.root} ({cam.name} {card.slot}) -> {self.settings['kind_folders'][kind]}{os.sep}"
                           f"{cam_folder(self._cam_for(card, cam))}: {len(files)} files")
         self.copying = True
         self._update_awake()
@@ -1139,6 +1164,10 @@ class MainWindow(QMainWindow):
         if grand:
             so_far = sum(self.progress.values())
             self.bar.setValue(int(1000 * so_far / grand))
+            percent = int(100 * so_far / grand)
+            if percent != self._badge:          # the Dock icon on a Mac; nothing on Windows
+                self._badge = percent
+                progress_badge(percent)
             if self.run_progress is not None:
                 self.run_progress.update(so_far)
                 self.bar.setFormat(self.run_progress.text())
@@ -1169,10 +1198,12 @@ class MainWindow(QMainWindow):
         self.copying = False
         self.run_progress = None
         self.card_progress = {}
+        self._badge = None
+        progress_badge(None)
         self._set_busy(False)
         self._update_awake()
         self._log("Cancelled. Run again to continue where it stopped." if self.cancel.is_set()
-                  else "Finished. Google Drive keeps uploading in the background; leave the PC on until it is done.")
+                  else f"Finished. Google Drive keeps uploading in the background; leave the {COMPUTER} on until it is done.")
         if self.spilled_to:
             self._log(f"Part of this copy went to the backup folder {self.spilled_to} because the Raw folder "
                       "filled up. Move it across once there is room; until then this shoot lives in two places.")
@@ -1334,6 +1365,8 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         self.run_progress = None
         self.card_progress = {}
+        self._badge = None
+        progress_badge(None)
         self.bar.setValue(0)
         self.bar.setFormat("")
         QApplication.alert(self)
@@ -1353,10 +1386,10 @@ class MainWindow(QMainWindow):
             head = f"Everything on {len(gaps)} card(s) is already in the project folders."
         title = QLabel(head)
         title.setWordWrap(True)
-        title.setStyleSheet("font-size: 12pt;")
+        title.setStyleSheet(STYLE["dialog_text"])
         listing = QPlainTextEdit()
         listing.setReadOnly(True)
-        listing.setFont(QFont("Consolas", 9))
+        listing.setFont(mono_font(9))
         listing.setLineWrapMode(QPlainTextEdit.NoWrap)
         listing.setPlainText(text)
         listing.setMinimumSize(760, 380)
@@ -1421,6 +1454,20 @@ class MainWindow(QMainWindow):
         self._save_settings()
         self._power_tick()
 
+    def _ask_shutdown_permission(self, on: bool) -> None:
+        """A Mac asks once whether CardCopy may shut it down: ask now, while someone is there to answer,
+        rather than at the moment it is needed with nobody around. (Windows needs no permission.)"""
+        if on:
+            threading.Thread(target=lambda: self.signals.shutdown_allowed.emit(*power.prepare_shutdown()),
+                             daemon=True).start()
+
+    def _on_shutdown_allowed(self, ok: bool, why: str) -> None:
+        if ok or not self.shutdown_check.isChecked():
+            return
+        self.shutdown_check.setChecked(False)
+        self._log("Shutdown NOT armed: " + why)
+        QMessageBox.warning(self, "CardCopy", why)
+
     def _after_copy_for_shutdown(self) -> None:
         if not self.shutdown_check.isChecked():
             return
@@ -1441,8 +1488,8 @@ class MainWindow(QMainWindow):
         if wanted != self.awake:
             self.awake = wanted
             self.keep_awake(wanted)
-            self._log("Keeping the PC awake until this is done (the screen may still turn off)." if wanted
-                      else "The PC may sleep again.")
+            self._log(f"Keeping the {COMPUTER} awake until this is done (the screen may still turn off)." if wanted
+                      else f"The {COMPUTER} may sleep again.")
 
     def _power_tick(self) -> None:
         self._update_awake()
@@ -1498,7 +1545,7 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle("CardCopy")
         dialog.setModal(True)
         text = QLabel()
-        text.setStyleSheet("font-size: 12pt;")
+        text.setStyleSheet(STYLE["dialog_text"])
         cancel = PillButton("Cancel shutdown", primary=True)
         lay = QVBoxLayout(dialog)
         lay.setContentsMargins(28, 22, 28, 18)
@@ -1512,12 +1559,12 @@ class MainWindow(QMainWindow):
                 timer.stop()
                 dialog.accept()
             else:
-                text.setText(f"{reason}\nThe PC shuts down in {left[0]} seconds.")
+                text.setText(f"{reason}\nThe {COMPUTER} shuts down in {left[0]} seconds.")
 
         timer = QTimer(dialog)
         timer.timeout.connect(tick)
         cancel.clicked.connect(dialog.reject)
-        text.setText(f"{reason}\nThe PC shuts down in 60 seconds.")
+        text.setText(f"{reason}\nThe {COMPUTER} shuts down in 60 seconds.")
         timer.start(1000)
         QApplication.alert(self)
         if dialog.exec() == QDialog.Accepted:
@@ -1553,7 +1600,7 @@ class MainWindow(QMainWindow):
         dialog.setWindowTitle("CardCopy")
         dialog.setModal(True)
         title = QLabel(f"CardCopy {update.version} is available")
-        title.setStyleSheet("font-size: 14pt; font-weight: 600;")
+        title.setStyleSheet(STYLE["dialog_title"])
         body = QLabel(f"You have {__version__}." + (f"\n\nWhat's new:\n{update.notes}" if update.notes else ""))
         body.setWordWrap(True)
         body.setMinimumWidth(420)
@@ -1640,7 +1687,7 @@ class MainWindow(QMainWindow):
         elif result == 2:
             reason = outcome.get("error")
             self._log(f"Could not install CardCopy {update.version} by itself: {reason}. "
-                      "Opening the download page instead; nothing on this PC was changed.")
+                      f"Opening the download page instead; nothing on this {COMPUTER} was changed.")
             QMessageBox.warning(self, "CardCopy",
                                 f"CardCopy could not update itself:\n{reason}\n\n"
                                 "Nothing was changed. The download page will open so you can install it by hand.")
@@ -1687,7 +1734,7 @@ class MainWindow(QMainWindow):
             return
         self._after_eject = then
         self.eject_btn.setEnabled(False)
-        self._log("Ejecting " + ", ".join(r[:2] for r in roots) + "…")
+        self._log("Ejecting " + ", ".join(c.volume.letter for c in self._real_cards()) + "…")
 
         def work() -> None:
             self.signals.ejected.emit([(root, *self.eject_volume(root)) for root in roots])
@@ -1696,7 +1743,8 @@ class MainWindow(QMainWindow):
 
     def _on_ejected(self, results: list) -> None:
         for root, ok, message in results:
-            self._log(f"{root[:2]}  {message}" if ok else f"{root[:2]}  NOT ejected: {message}")
+            name = os.path.basename(root.rstrip("/")) if MAC else root[:2]
+            self._log(f"{name}  {message}" if ok else f"{name}  NOT ejected: {message}")
         self.eject_btn.setEnabled(not self.copying)
         self.refresh()
         then, self._after_eject = self._after_eject, None
@@ -1721,10 +1769,9 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        if not self._blur_tried:                 # needs the native window, so not before the first show
-            self._blur_tried = True
-            self.workspace.see_through = enable_blur_behind(self)
-            self.workspace.update()
+        if not self._first_show_done:            # needs the native window, so not before the first show
+            self._first_show_done = True
+            after_first_show(self)
 
     def closeEvent(self, event) -> None:
         if self.copying:
@@ -1744,10 +1791,24 @@ def main() -> int:
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FramedHorizon.CardCopy")
     app = QApplication([])
-    app.setWindowIcon(QIcon(f"{ASSETS}/cardcopy.ico"))
+    if not MAC:                  # a Mac takes the icon from the app bundle (Dock, Finder, the About box)
+        app.setWindowIcon(QIcon(f"{ASSETS}/cardcopy.ico"))
     app.setApplicationName("CardCopy")
-    app.setStyle("Fusion")
-    app.setStyleSheet(app_stylesheet())
+    app.setApplicationVersion(__version__)
+    install(app)                 # the look's style, palette and stylesheet
     window = MainWindow()
     window.show()
+    selftest = os.environ.get("CARDCOPY_SELFTEST")
+    if selftest:                 # the Mac build opens the finished app once to prove it starts
+        QTimer.singleShot(6000, lambda: _selftest(window, selftest))
     return app.exec()
+
+
+def _selftest(window: MainWindow, folder: str) -> None:
+    """Save what the window looks like (and, on a Mac, the whole screen with its real title bar), then quit."""
+    os.makedirs(folder, exist_ok=True)
+    window.grab().save(os.path.join(folder, "app-window.png"))
+    if sys.platform == "darwin":
+        import subprocess
+        subprocess.run(["screencapture", "-x", os.path.join(folder, "app-screen.png")], check=False, timeout=30)
+    QApplication.quit()

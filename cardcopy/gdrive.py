@@ -1,4 +1,5 @@
-"""What can be learned about Google Drive for desktop from the outside. Read-only, no Qt.
+"""What can be learned about Google Drive for desktop from the outside (Windows; a Mac uses mac/gdrive.py).
+Read-only, no Qt.
 
 Everything copied "to Google Drive" first lands in Drive's local cache and is uploaded from there, so the
 drive that holds the cache needs the room, not the virtual G: drive (which reports the account's cloud quota).
@@ -8,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 
 
 def cache_dirs() -> list[str]:
@@ -68,3 +70,18 @@ def is_drive_path(path: str) -> bool:
     "name@gmail.com - G..."); the streamed volume always has a "My Drive" folder at its root."""
     drive = os.path.splitdrive(os.path.abspath(path))[0]
     return bool(drive) and os.path.isdir(os.path.join(drive + os.sep, "My Drive")) and bool(cache_dirs())
+
+
+def volume_name(path: str) -> str:
+    """The drive a folder is on, the way a person would say it ("D:")."""
+    return os.path.splitdrive(os.path.abspath(path))[0] or "that drive"
+
+
+def same_volume(a: str, b: str) -> bool:
+    """Both folders are on one drive, so they fill up together."""
+    return os.path.splitdrive(os.path.abspath(a))[0].lower() == os.path.splitdrive(os.path.abspath(b))[0].lower()
+
+
+if sys.platform == "darwin":            # ~/Library/CloudStorage instead of a G: drive
+    from .mac.gdrive import (cache_dirs, cache_free_space, default_raw_folder, effective_free_space,  # noqa: E402,F401,F811
+                             is_drive_path, same_volume, volume_name)

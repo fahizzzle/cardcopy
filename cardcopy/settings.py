@@ -1,8 +1,10 @@
-"""Remembered choices: %APPDATA%\\CardCopy\\settings.json (or CARDCOPY_HOME)."""
+"""Remembered choices: %APPDATA%\\CardCopy\\settings.json on Windows,
+~/Library/Application Support/CardCopy/settings.json on a Mac (or CARDCOPY_HOME)."""
 from __future__ import annotations
 
 import json
 import os
+import sys
 
 from .structure import DEFAULT_BASE, DEFAULT_KIND_FOLDERS
 
@@ -34,8 +36,10 @@ DEFAULTS = {
 
 
 def settings_path() -> str:
-    home = os.environ.get("CARDCOPY_HOME") or os.path.join(
-        os.environ.get("APPDATA") or os.path.expanduser("~"), "CardCopy")
+    home = os.environ.get("CARDCOPY_HOME")
+    if not home and sys.platform == "darwin":
+        home = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "CardCopy")
+    home = home or os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "CardCopy")
     return os.path.join(home, "settings.json")
 
 

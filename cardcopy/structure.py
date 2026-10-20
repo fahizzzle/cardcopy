@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 
 from .copier import FileEntry
@@ -17,6 +18,9 @@ from .identify import CopyOptions, tag_files
 
 KINDS = ("photo", "video", "audio")
 DEFAULT_BASE = r"G:\My Drive\Raw"
+if sys.platform == "darwin":                 # My Drive/Raw of the first signed-in account, if there is one
+    from .gdrive import default_raw_folder
+    DEFAULT_BASE = default_raw_folder()
 DEFAULT_KIND_FOLDERS = {"photo": "Raw Photo", "video": "Raw Video", "audio": "Raw Audio"}
 _BAD = re.compile(r'[<>:"|?*\x00-\x1f]')
 

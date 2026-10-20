@@ -23,13 +23,17 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
 # Where latest.json lives: an asset of the newest GitHub release (scripts/release.ps1 uploads it). Empty = never check.
-UPDATE_URL = "https://github.com/fahizzzle/cardcopy/releases/latest/download/latest.json"
+# A Mac reads its own latest-mac.json beside it, whose "url" is the Mac download: a release without one is
+# simply not offered to Macs (the check fails quietly, as when offline).
+UPDATE_URL = "https://github.com/fahizzzle/cardcopy/releases/latest/download/" + \
+    ("latest-mac.json" if sys.platform == "darwin" else "latest.json")
 
 
 @dataclass
