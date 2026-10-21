@@ -103,6 +103,8 @@ def test_recorder_microsd_in_the_cameras_reader_gets_its_own_tile(app, tmp_path,
         recorder_cam = next(cam for cam in window.cameras if cam.default_name == "Audio recorder")
         assert window._kind_of(recorder_cam) == "audio"
         assert recorder_cam.cards[0].key in window.checked and window.audio_check.isChecked()
+        report = window.diagnostic_report()
+        assert "MICROSD" in report and "Audio recorder" in report and "usb:01100000:READER" in report
     finally:
         window.close()
 

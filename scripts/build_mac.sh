@@ -26,6 +26,8 @@ done
 iconutil -c icns build/AppIcon.iconset -o mac/AppIcon.icns
 
 echo "== app"
+# the commit this build comes from, shown beside the version (Settings, sidebar, diagnostic report)
+git rev-parse --short HEAD > cardcopy/assets/build.txt 2>/dev/null || echo dev > cardcopy/assets/build.txt
 rm -rf dist/CardCopy.app dist/CardCopy
 "$PYTHON" -m PyInstaller --noconfirm --clean --distpath dist --workpath build/pyinstaller mac/CardCopy.spec
 codesign --force --deep --sign - dist/CardCopy.app

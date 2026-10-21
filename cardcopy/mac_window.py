@@ -19,12 +19,13 @@ from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QApplication, QDialog, QFormLayout, QHBoxLayout, QLabel, QMenuBar, QMessageBox,
                                QVBoxLayout, QWidget)
 
-from . import __version__, updates
+from . import BUILD, __version__, updates
 from .aqua import STYLE, Logo, Panel, PillButton, Subtitle, ToolGroup, Toolbar, heading, nav_caption, well_text
 from .structure import KINDS
 
 HELP_URL = "https://github.com/fahizzzle/cardcopy#readme"
 SIDEBAR_W = 220
+VERSION = f"{__version__} ({BUILD})" if BUILD else __version__
 
 
 def arrange(w) -> None:
@@ -58,7 +59,7 @@ def arrange(w) -> None:
     for button in (w.open_project_photo_btn, w.open_project_video_btn, w.open_project_audio_btn):
         side.addWidget(button)
     side.addStretch(1)
-    version = QLabel(f"CardCopy {__version__}")
+    version = QLabel(f"CardCopy {VERSION}")
     version.setStyleSheet(STYLE["scan"] + " padding: 0 10px;")
     side.addWidget(version)
     w.sidebar.setFixedWidth(SIDEBAR_W)
@@ -224,7 +225,7 @@ class SettingsDialog(QDialog):
         self.status = QLabel("")
         self.status.setStyleSheet(STYLE["detail"])
         self.status.setWordWrap(True)
-        version = QLabel(f"Version {__version__}  ·  Framed Horizon LLC")
+        version = QLabel(f"Version {VERSION}  ·  Framed Horizon LLC")
         version.setStyleSheet(STYLE["detail"])
         group = Panel(radius=20)
         gl = QVBoxLayout(group)
@@ -336,11 +337,20 @@ def menus(w) -> QMenuBar:
 
     helper = bar.addMenu("Help")
     _action(helper, "CardCopy Help", lambda: QDesktopServices.openUrl(QUrl(HELP_URL)))
+    _action(helper, "Copy Diagnostic Report", lambda: copy_report(w))
     return bar
 
 
 def about(w) -> None:
     QMessageBox.about(w, "About CardCopy",
-                      f"<b>CardCopy {__version__}</b><br><br>Copies the photos, videos and recordings off camera "
+                      f"<b>CardCopy {VERSION}</b><br><br>Copies the photos, videos and recordings off camera "
                       "cards into tidy project folders. It never deletes and never overwrites anything, on the "
                       "cards or at the destination.<br><br>Made by Framed Horizon LLC.")
+
+
+def copy_report(w) -> None:
+    """Help > Copy Diagnostic Report: what CardCopy sees, on the clipboard, ready to paste into a message."""
+    QApplication.clipboard().setText(w.diagnostic_report())
+    QMessageBox.information(w, "CardCopy", "The diagnostic report is on the clipboard.\n\n"
+                                           "Paste it (Cmd-V) into your message. It lists the cards' names, "
+                                           "folders and what CardCopy found on them; nothing from inside the files.")

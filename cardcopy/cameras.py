@@ -102,10 +102,6 @@ class Camera:
     cards: list[Card]
 
 
-def _body_key(card: Card) -> str:
-    return f"body:{card.info.model}:{card.info.body_id}" if card.info.body_id else ""
-
-
 def holds(card: Card) -> str:
     """'photo', 'video' or 'audio': what a scanned card mostly holds. '' when blank or not read yet."""
     i = card.info
@@ -114,10 +110,22 @@ def holds(card: Card) -> str:
     return default_kind("", i.raw_size + i.jpeg_size, i.video_size, i.audio_size)
 
 
+def _recordings(card: Card) -> bool:
+    """A recorder's card: it mostly holds audio, and nothing but a recorder names it. Camera files left
+    behind (a microSD that was once in a camera keeps that camera's MEDIAPRO.XML) do not make it the camera's."""
+    return holds(card) == "audio" and default_kind(card.info.model) != "audio"
+
+
+def _body_key(card: Card) -> str:
+    if not card.info.body_id or _recordings(card):
+        return ""
+    return f"body:{card.info.model}:{card.info.body_id}"
+
+
 def _what(card: Card) -> str:
     """What a card without a body id says it is: the model that wrote it, 'audio' for a recorder's
     card that names no recorder, '' for anything else."""
-    return card.info.model or ("audio" if holds(card) == "audio" else "")
+    return "audio" if _recordings(card) else card.info.model
 
 
 def _joins(card: Card, body: list[Card]) -> bool:
@@ -128,9 +136,11 @@ def _joins(card: Card, body: list[Card]) -> bool:
     hub as the camera's SD card, or a card another model wrote.
     """
     model = next((c.info.model for c in body if c.info.model), "")
+    if _recordings(card) or holds(card) == "audio":
+        return default_kind(model) == "audio"
     if card.info.model:
         return card.info.model == model
-    return holds(card) != "audio" or default_kind(model) == "audio"
+    return True
 
 
 def group_cards(cards: list[Card], names: dict[str, str] | None = None) -> list[Camera]:
@@ -172,12 +182,13 @@ def group_cards(cards: list[Card], names: dict[str, str] | None = None) -> list[
         for i, card in enumerate(members, 1):
             card.slot = f"Card {i}"
         recorder = all(holds(c) in ("audio", "") for c in members) and any(holds(c) == "audio" for c in members)
-        model = next((c.info.model for c in members if c.info.model), "") \
-            or ("Audio recorder" if recorder else "") \
+        named = next((c.info.model for c in members if c.info.model), "")       # read from the card itself
+        if recorder and default_kind(named) != "audio":
+            named = ""                      # a camera's leftover files on a recorder's card: not its name
+        model = named or ("Audio recorder" if recorder else "") \
             or next((c.volume.model for c in members if c.volume.model), "") \
             or members[0].volume.label or "Unknown camera"
-        make = next((c.info.make for c in members if c.info.make), "")
-        named = next((c.info.model for c in members if c.info.model), "")       # read from the card itself
+        make = next((c.info.make for c in members if c.info.make), "") if named else ""
         cameras.append(Camera(identity, model, friendly_name(named, make) if named else model,
                               names.get(identity, ""), members))
 

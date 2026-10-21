@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QComboBox, QDialog, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
     QMessageBox, QPlainTextEdit, QScrollArea, QSpinBox, QTimeEdit, QVBoxLayout, QWidget)
 
-from . import __version__, gdrive, missing as missing_mod, power, receipt, selfupdate, updates
+from . import BUILD, __version__, gdrive, missing as missing_mod, power, receipt, selfupdate, updates
 from . import settings as settings_mod
 from .camera_panel import CameraPanel, CardOption, human
 from .cameras import Camera, Card, default_kind, group_cards, split_per_card
@@ -597,9 +597,9 @@ class MainWindow(QMainWindow):
         if key == "":
             self.scanning = False
             self.scan_label.setText("")
-            if any(not c.info.model for c in self.cards):
-                # a card that names no camera: whether it holds photos, video or a recorder's audio is known
-                # only now, and with it which device it belongs with
+            if any(not c.info.model for c in self.cards) or self._grouping_changed():
+                # what a card holds is known only now, and with it which device it belongs with: a card of
+                # recordings leaves the camera it was first put with, a nameless one learns photo or video
                 self._rebuild_cameras()
                 return
         card = next((c for c in self.cards if c.key == key), None)
@@ -719,6 +719,35 @@ class MainWindow(QMainWindow):
     def _on_options_changed(self) -> None:
         self._refresh_rows()
         self._update_preview()
+
+    def _grouping_changed(self) -> bool:
+        def shape(cameras: list[Camera]) -> list:
+            return sorted((cam.identity, sorted(c.key for c in cam.cards)) for cam in cameras)
+        return shape(group_cards(self.cards, self.settings["camera_names"])) != shape(self.cameras)
+
+    def diagnostic_report(self) -> str:
+        """Everything CardCopy knows about the connected cards and how it grouped them, as plain text to
+        paste into a message. Paths and names only: nothing from inside the files."""
+        import platform
+        lines = [f"CardCopy {__version__}{f' ({BUILD})' if BUILD else ''} on {platform.platform()}",
+                 f"View: {self.settings['mode']}", "", "Cards:"]
+        for card in self.cards:
+            v, i = card.volume, card.info
+            try:
+                top = ", ".join(sorted(os.listdir(v.root))[:12])
+            except OSError as exc:
+                top = f"(cannot list: {exc})"
+            lines += [f"  {v.root}   label={v.label!r} type={v.drive_type} model={v.model!r} device={v.device_key!r} "
+                      f"lun={v.lun}",
+                      f"    system: {v.facts}" if v.facts else "    system: -",
+                      f"    card says: make={i.make!r} model={i.model!r} body={i.body_id!r}; read={i.scanned} "
+                      f"raw={i.raws} jpeg={i.jpegs} video={i.videos} audio={i.audios} xml={i.xmls}",
+                      f"    top folder: {top}"]
+        lines += ["", "Tiles:"]
+        for cam in self.cameras:
+            lines.append(f"  {cam.name}  [{cam.identity}]  kind={self._kind_of(cam)}: "
+                         + ", ".join(f"{c.slot} {c.volume.root}" for c in cam.cards))
+        return "\n".join(lines) + "\n"
 
     def _rebuild_cameras(self, tick_new: bool = False) -> None:
         self.cameras = group_cards(self.cards, self.settings["camera_names"])

@@ -59,3 +59,16 @@ def test_before_the_card_is_read_it_sits_with_the_camera_then_moves_out():
 def test_loose_cards_of_one_kind_keep_the_plain_device_identity():
     cams = group_cards([card("/Volumes/A", 0, model="ZOOM F6", audio=1), card("/Volumes/B", 1, model="ZOOM F6", audio=1)])
     assert [cam.identity for cam in cams] == [f"usb:{READER}"]
+
+
+def test_camera_files_left_on_a_recorders_card_do_not_make_it_the_cameras():
+    """A microSD once in the FX3 keeps its MEDIAPRO.XML (the FX3's body id) after the recorder fills it."""
+    cams = group_cards([card("/Volumes/SD", 0, make="Sony", model="ILME-FX3", body="5051234", video=10**9),
+                        card("/Volumes/MICRO", 1, make="Sony", model="ILME-FX3", body="5051234", audio=10**8)])
+    assert names(cams) == [("Audio recorder", ["/Volumes/MICRO"]), ("FX3", ["/Volumes/SD"])]
+
+
+def test_recordings_never_join_a_camera_even_on_another_device():
+    cams = group_cards([card("/Volumes/SD", 0, dev="usb:cam", make="Sony", model="ILME-FX3", body="1", video=10**9),
+                        card("/Volumes/MICRO", 0, dev="usb:reader", make="Sony", model="ILME-FX3", body="1", audio=10**8)])
+    assert len(cams) == 2
