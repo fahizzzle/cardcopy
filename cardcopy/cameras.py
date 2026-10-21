@@ -106,9 +106,37 @@ def _body_key(card: Card) -> str:
     return f"body:{card.info.model}:{card.info.body_id}" if card.info.body_id else ""
 
 
+def holds(card: Card) -> str:
+    """'photo', 'video' or 'audio': what a scanned card mostly holds. '' when blank or not read yet."""
+    i = card.info
+    if not i.scanned or not (i.raw_size or i.jpeg_size or i.video_size or i.audio_size):
+        return ""
+    return default_kind("", i.raw_size + i.jpeg_size, i.video_size, i.audio_size)
+
+
+def _what(card: Card) -> str:
+    """What a card without a body id says it is: the model that wrote it, 'audio' for a recorder's
+    card that names no recorder, '' for anything else."""
+    return card.info.model or ("audio" if holds(card) == "audio" else "")
+
+
+def _joins(card: Card, body: list[Card]) -> bool:
+    """Does a card without a body id belong to the camera plugged in through the same USB device?
+
+    Yes for that camera's other slot: blank, or written by the same model. No for a card that is
+    plainly something else: a field recorder's microSD in the second slot of the same card reader or
+    hub as the camera's SD card, or a card another model wrote.
+    """
+    model = next((c.info.model for c in body if c.info.model), "")
+    if card.info.model:
+        return card.info.model == model
+    return holds(card) != "audio" or default_kind(model) == "audio"
+
+
 def group_cards(cards: list[Card], names: dict[str, str] | None = None) -> list[Camera]:
     """Cards written by the same body go together; a blank card joins the camera
-    it is physically plugged into (same USB device)."""
+    it is physically plugged into (same USB device), but a card that is plainly
+    another device's (see _joins) gets a tile of its own."""
     names = names or {}
     groups: dict[str, list[Card]] = {}
     by_device: dict[str, str] = {}
@@ -118,19 +146,34 @@ def group_cards(cards: list[Card], names: dict[str, str] | None = None) -> list[
             groups.setdefault(key, []).append(card)
             if card.volume.device_key:
                 by_device.setdefault(card.volume.device_key, key)
+    loose: dict[str, list[Card]] = {}           # USB device -> its cards that belong to no body
     for card in cards:
         if _body_key(card):
             continue
         dev = card.volume.device_key
-        key = by_device.get(dev) or (f"usb:{dev}" if dev else f"vol:{card.volume.key}")
-        groups.setdefault(key, []).append(card)
+        body = by_device.get(dev)
+        if body and _joins(card, groups[body]):
+            groups[body].append(card)
+        elif dev:
+            loose.setdefault(dev, []).append(card)
+        else:
+            groups.setdefault(f"vol:{card.volume.key}", []).append(card)
+    for dev, members in loose.items():
+        # one reader with an SD and a microSD slot is one USB device: split it by what each card is
+        # (keeping the plain key when it holds one kind of card, so names given before stay attached)
+        kinds = {_what(c) for c in members}
+        for card in members:
+            key = f"usb:{dev}" if len(kinds) == 1 else f"usb:{dev}|{_what(card) or 'card'}"
+            groups.setdefault(key, []).append(card)
 
     cameras = []
     for identity, members in groups.items():
         members.sort(key=lambda c: (c.volume.lun if c.volume.lun is not None else 99, c.volume.root))
         for i, card in enumerate(members, 1):
             card.slot = f"Card {i}"
+        recorder = all(holds(c) in ("audio", "") for c in members) and any(holds(c) == "audio" for c in members)
         model = next((c.info.model for c in members if c.info.model), "") \
+            or ("Audio recorder" if recorder else "") \
             or next((c.volume.model for c in members if c.volume.model), "") \
             or members[0].volume.label or "Unknown camera"
         make = next((c.info.make for c in members if c.info.make), "")

@@ -88,6 +88,7 @@ class MainWindow(QMainWindow):
         self.checked: set[str] = set()
         self.card_cam: dict[str, int] = {}   # SD cards view: Cam folder picked for one card
         self.seen: set[str] = set()
+        self.seen_ids: set[str] = set()      # devices (camera identities) that have had a tile
         self.generation = 0
         self.scanning = False
         self.copying = False
@@ -596,8 +597,10 @@ class MainWindow(QMainWindow):
         if key == "":
             self.scanning = False
             self.scan_label.setText("")
-            if any(not any(c.info.model for c in cam.cards) for cam in self.cameras):
-                self._rebuild_cameras()          # a card that names no camera: photo or video is known only now
+            if any(not c.info.model for c in self.cards):
+                # a card that names no camera: whether it holds photos, video or a recorder's audio is known
+                # only now, and with it which device it belongs with
+                self._rebuild_cameras()
                 return
         card = next((c for c in self.cards if c.key == key), None)
         if card is not None and card.info.audios and not self.audio_check.isChecked():
@@ -730,6 +733,13 @@ class MainWindow(QMainWindow):
                 elif not any(k in self.seen for k in keys):
                     self.checked.add(keys[0])
                 self.seen.update(keys)
+        elif not cards_mode:
+            # a device that only now has a tile of its own (a recorder's card split off the camera it sat
+            # beside, once its contents were read) starts like any new device: its first card ticked
+            for cam in self.cameras:
+                if cam.identity not in self.seen_ids and not any(c.key in self.checked for c in cam.cards):
+                    self.checked.add(cam.cards[0].key)
+        self.seen_ids.update(cam.identity for cam in self.cameras)
         shown = self.cameras
         hidden = [c for cam in self.cameras for c in cam.cards if self._is_empty(c)]
         if hidden and not self.empty_check.isChecked():
