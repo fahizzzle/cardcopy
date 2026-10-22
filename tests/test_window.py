@@ -109,6 +109,24 @@ def test_recorder_microsd_in_the_cameras_reader_gets_its_own_tile(app, tmp_path,
         window.close()
 
 
+@pytest.mark.parametrize("look", ["glass", "mac"])
+def test_audio_can_go_into_the_projects_raw_video_folder(app, tmp_path, monkeypatch, look):
+    window = _window(tmp_path, monkeypatch, look)
+    try:
+        window.project_edit.setText("bob")
+        window.audio_place.setCurrentIndex(1)
+        assert window.settings["audio_in_video"] is True
+        preview = window.preview.toPlainText()
+        assert "Raw Audio" not in preview and f"Audio{os.sep}   <-- " in preview      # the Zoom card's line
+        zoom = next(p for p in window.panels if p.kind_combo.currentText().endswith("Audio"))
+        assert zoom.combo.itemText(0) == "Audio"
+        window.folders_btn.click()                                   # Create folders only
+        assert os.path.isdir(os.path.join(window.base_edit.text(), "Raw Video", "bob", "Audio"))
+        assert not os.path.exists(os.path.join(window.base_edit.text(), "Raw Audio"))
+    finally:
+        window.close()
+
+
 def test_mac_appearance_switches_palette(app, monkeypatch):
     from cardcopy import aqua
     monkeypatch.setenv("CARDCOPY_APPEARANCE", "dark")

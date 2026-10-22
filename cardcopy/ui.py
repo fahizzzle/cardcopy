@@ -25,7 +25,7 @@ from .progress import Progress
 from .theme import (ASSETS, COMPUTER, FILE_MANAGER, MAC, STYLE, ActionButton, Backdrop, Check, LineEdit, Logo, NavButton,
                     Panel, PillButton, ProgressBar, Sidebar, TitleStrip, Toggle, after_first_show, heading,
                     hit_test_border, install, mono_font, nav_caption, progress_badge, setup_window, well_text)
-from .structure import (KINDS, Plan, build_plan, cam_folder, copy_jobs, create_folders, overlapping,
+from .structure import (AUDIO_FOLDER, KINDS, Plan, build_plan, cam_folders, copy_jobs, create_folders, overlapping,
                         project_path, spill_path)
 
 PICTURE_FILTER = "Pictures (*.png *.jpg *.jpeg *.webp *.bmp)"
@@ -180,7 +180,14 @@ class MainWindow(QMainWindow):
         self.video_check = Check("Video")
         self.audio_check = Check("Audio")
         self.audio_check.setToolTip("Field recorders (Zoom, Tascam, Sound Devices ...). Ticks itself when a "
-                                    "recorder's card is plugged in; its recordings go to the Raw Audio folder.")
+                                    "recorder's card is plugged in; \"Audio goes to\" says where its recordings land.")
+        names = self.settings["kind_folders"]
+        self.audio_place = QComboBox()       # where a recorder's files go
+        self.audio_place.addItem(f"{names['audio']}  ›  project  ›  Cam 1", "raw_audio")
+        self.audio_place.addItem(f"{names['video']}  ›  project  ›  {AUDIO_FOLDER}", "in_video")
+        self.audio_place.setToolTip("Recordings in a Raw Audio folder of their own, or beside the footage: an "
+                                    f"{AUDIO_FOLDER} folder inside the project's {names['video']} folder "
+                                    f"({AUDIO_FOLDER} 1, {AUDIO_FOLDER} 2 … with several recorders).")
         self.project_edit = LineEdit()
         self.project_edit.setPlaceholderText("e.g. Nour")
         self.project_edit.setToolTip("The folder made inside Raw Photo / Raw Video / Raw Audio.\n"
@@ -342,8 +349,11 @@ class MainWindow(QMainWindow):
         extras_row.addWidget(self.jpeg_check)
         extras_row.addWidget(self.xml_check)
         extras_row.addStretch(1)
+        audio_row = QHBoxLayout()
+        audio_row.addWidget(self.audio_place)
+        audio_row.addStretch(1)
         for label, row in (("Project name", self.project_edit), ("Raw folder", base_row),
-                           ("Uploading", kinds_row), ("Cam folders", cams_row),
+                           ("Uploading", kinds_row), ("Audio goes to", audio_row), ("Cam folders", cams_row),
                            ("Also copy", extras_row), ("When full", spill_box)):
             caption = QLabel(label)
             caption.setStyleSheet(STYLE["soft"])
@@ -448,6 +458,7 @@ class MainWindow(QMainWindow):
         self.photo_check.toggled.connect(self._on_kinds_changed)
         self.video_check.toggled.connect(self._on_kinds_changed)
         self.audio_check.toggled.connect(self._on_kinds_changed)
+        self.audio_place.currentIndexChanged.connect(self._on_audio_place_changed)
         for spin in self.cam_spins.values():
             spin.valueChanged.connect(self._on_cam_count_changed)
         self.jpeg_check.toggled.connect(self._on_options_changed)
@@ -483,6 +494,9 @@ class MainWindow(QMainWindow):
             spin.blockSignals(True)
             spin.setValue(int(s["cam_counts"].get(kind, 0)))
             spin.blockSignals(False)
+        self.audio_place.blockSignals(True)
+        self.audio_place.setCurrentIndex(1 if s.get("audio_in_video") else 0)
+        self.audio_place.blockSignals(False)
         self.base_edit.setText(s["base"])
         self.spill_edit.setText(s["spill_base"])
         self._on_spill_changed()
@@ -517,6 +531,7 @@ class MainWindow(QMainWindow):
         s["shutdown_at"] = self.shutdown_at.time().toString("HH:mm")
         s["copy_jpeg"] = self.jpeg_check.isChecked()
         s["copy_xml"] = self.xml_check.isChecked()
+        s["audio_in_video"] = self._audio_in_video()
         try:
             settings_mod.save(s)
         except OSError as exc:
@@ -608,7 +623,7 @@ class MainWindow(QMainWindow):
             self.audio_check.setChecked(True)
             self._save_settings()
             self._log(f"{card.volume.root} holds {card.info.audios:,} recording(s): Audio ticked, they go to "
-                      f"{self.settings['kind_folders']['audio']}. Untick Audio if you would rather leave them.")
+                      f"{self._audio_destination()}. Untick Audio if you would rather leave them.")
         if card is not None and self._is_empty(card) and not self.empty_check.isChecked():
             self._rebuild_cameras()              # it just turned out to be empty: take it off the list
             return
@@ -790,11 +805,13 @@ class MainWindow(QMainWindow):
                 widget.deleteLater()
         self.panels = []
         for index, cam in enumerate(self.view):
-            panel = CameraPanel(cam, self._cam_of(cam), self._cam_count(self._kind_of(cam)),
+            kind = self._kind_of(cam)
+            panel = CameraPanel(cam, self._cam_of(cam), self._cam_count(kind),
                                 self.settings["camera_pictures"].get(cam.identity, ""), self.checked,
-                                self._kind_of(cam), self.settings["kind_folders"],
+                                kind, self._kind_labels(),
                                 self.card_cam if cards_mode else None, self._options(),
-                                self._kind_off(cam))
+                                self._kind_off(cam),
+                                cam_folders(kind, self._cam_count(kind), self._audio_in_video()))
             panel.card_cam_chosen.connect(self._on_card_cam_chosen)
             panel.card_toggled.connect(self._on_card_toggled)
             panel.cam_chosen.connect(self._on_cam_chosen)
@@ -993,7 +1010,8 @@ class MainWindow(QMainWindow):
         base = self.base_edit.text().strip()
         if not project or not base or not self._kinds():
             return None
-        plan = build_plan(base, project, self._kinds(), self._cam_counts(), self.settings["kind_folders"])
+        plan = build_plan(base, project, self._kinds(), self._cam_counts(), self.settings["kind_folders"],
+                          audio_in_video=self._audio_in_video())
         # a name made only of illegal characters would target Raw Photo itself
         return plan if project_path(project) else None
 
@@ -1022,6 +1040,37 @@ class MainWindow(QMainWindow):
                      f"   ({human(spare)} free on {spare_drive})\nin the same Raw ... {os.sep}project{os.sep}Cam layout.")
         self.preview.setPlainText(text)
 
+    def _audio_in_video(self) -> bool:
+        """Recordings go into the project's Raw Video folder (…\\Raw Video\\<project>\\Audio)."""
+        return self.audio_place.currentData() == "in_video"
+
+    def _audio_destination(self) -> str:
+        names = self.settings["kind_folders"]
+        if self._audio_in_video():
+            return f"an {AUDIO_FOLDER} folder in the project's {names['video']} folder"
+        return names["audio"]
+
+    def _kind_labels(self) -> dict[str, str]:
+        """What each camera tile's Raw folder menu says: the folder names, audio's as it is set up."""
+        labels = dict(self.settings["kind_folders"])
+        if self._audio_in_video():
+            labels["audio"] = f"{labels['video']} › {AUDIO_FOLDER}"
+        return labels
+
+    def _project_audio(self, video: str, audio: str, project: str) -> str:
+        """The folder "Project audio" opens: Raw Audio\\<project>, or the Audio folder beside the video."""
+        if not self._audio_in_video():
+            return os.path.join(audio, project)
+        inside = os.path.join(video, project, AUDIO_FOLDER)
+        if not os.path.isdir(inside) and os.path.isdir(inside + " 1"):
+            return os.path.join(video, project)      # several recorders: Audio 1, Audio 2 … sit there
+        return inside
+
+    def _on_audio_place_changed(self) -> None:
+        self._save_settings()
+        self._rebuild_cameras()                       # the recorders' tiles name the new folder
+        self._update_preview()
+
     def _open_targets(self) -> dict:
         """Button -> folder it opens ('' when it cannot be worked out yet)."""
         base = self.base_edit.text().strip()
@@ -1035,7 +1084,7 @@ class MainWindow(QMainWindow):
                 self.open_audio_btn: audio if base else "",
                 self.open_project_photo_btn: os.path.join(photo, project) if base and project else "",
                 self.open_project_video_btn: os.path.join(video, project) if base and project else "",
-                self.open_project_audio_btn: os.path.join(audio, project) if base and project else ""}
+                self.open_project_audio_btn: self._project_audio(video, audio, project) if base and project else ""}
 
     def _update_open_buttons(self) -> None:
         """A button is live only while its folder exists (a project's folders appear once they are created)."""
@@ -1126,7 +1175,7 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.critical(self, "CardCopy", f"Could not create the folders:\n{exc}")
             return
-        self.last_roots = list(plan.roots.values())
+        self.last_roots = list(dict.fromkeys(plan.roots.values()))     # audio in video shares the video folder
         self._update_open_buttons()
         for root in self.last_roots:
             self._log(f"Project folder: {root}")
@@ -1143,8 +1192,8 @@ class MainWindow(QMainWindow):
                 jobs.append((card, files))
                 self.run_info[card.key] = (card.volume.root, cam.name, card.slot,
                                            plan.dest(kind, self._cam_for(card, cam)), len(files))
-                self._log(f"{card.volume.root} ({cam.name} {card.slot}) -> {self.settings['kind_folders'][kind]}{os.sep}"
-                          f"{cam_folder(self._cam_for(card, cam))}: {len(files)} files")
+                where = os.path.relpath(plan.dest(kind, self._cam_for(card, cam)), base)
+                self._log(f"{card.volume.root} ({cam.name} {card.slot}) -> {where}: {len(files)} files")
         self.copying = True
         self._update_awake()
         self.run_failed = False
@@ -1793,7 +1842,8 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy: bool) -> None:
         for w in (self.copy_btn, self.folders_btn, self.missing_btn, self.refresh_btn, self.add_folder_btn, self.eject_btn, self.mode_cameras_btn, self.mode_cards_btn,
                   self.project_edit, self.base_edit, self.base_btn, *self.cam_spins.values(), self.jpeg_check, self.xml_check, self.receipt_check, self.eject_check, self.all_check, self.photo_check,
-                  self.video_check, self.audio_check, self.verify_check, self.spill_check, self.spill_edit, self.spill_btn):
+                  self.video_check, self.audio_check, self.audio_place, self.verify_check, self.spill_check, self.spill_edit,
+                  self.spill_btn):
             w.setEnabled(not busy)
         for panel in self.panels:
             panel.set_locked(busy)

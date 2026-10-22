@@ -112,7 +112,8 @@ class CardOption(Panel):
     cam_chosen = Signal(str, int)
 
     def __init__(self, card: Card, checked: bool, cam_number: int = 0, cam_count: int = 0,
-                 options: CopyOptions | None = None, kind_off: str = "") -> None:
+                 options: CopyOptions | None = None, kind_off: str = "",
+                 cam_names: list[str] | None = None) -> None:
         super().__init__(radius=16)
         self.key = card.key
         self.setCursor(Qt.PointingHandCursor)
@@ -138,7 +139,7 @@ class CardOption(Panel):
         self.combo = None
         if cam_count:                             # SD cards view: each card picks its own Cam folder
             self.combo = QComboBox()
-            self.combo.addItems([cam_folder(n) for n in range(1, cam_count + 1)])
+            self.combo.addItems(cam_names or [cam_folder(n) for n in range(1, cam_count + 1)])
             self.combo.setCurrentIndex(min(max(cam_number, 1), cam_count) - 1)
             self.combo.currentIndexChanged.connect(lambda i: self.cam_chosen.emit(self.key, i + 1))
             into = QHBoxLayout()
@@ -248,7 +249,7 @@ class CameraPanel(Panel):
     def __init__(self, cam: Camera, cam_number: int, cam_count: int, picture: str, checked: set[str],
                  kind: str = "photo", kind_labels: dict[str, str] | None = None,
                  card_cams: dict[str, int] | None = None, options: CopyOptions | None = None,
-                 kind_off: str = "") -> None:
+                 kind_off: str = "", cam_names: list[str] | None = None) -> None:
         super().__init__(radius=22)
         self.identity = cam.identity
         self.options: dict[str, CardOption] = {}
@@ -269,7 +270,7 @@ class CameraPanel(Panel):
         sub = QLabel(cam.default_name if cam.name != cam.default_name else cam.model)
         sub.setStyleSheet(STYLE["soft"])
         self.combo = QComboBox()
-        self.combo.addItems([cam_folder(n) for n in range(1, cam_count + 1)])
+        self.combo.addItems(cam_names or [cam_folder(n) for n in range(1, cam_count + 1)])   # Cam 1 … or Audio
         self.combo.setCurrentIndex(cam_number - 1)
         self.rename_btn = _link("Rename")
         self.picture_btn = _link("Picture")
@@ -298,7 +299,7 @@ class CameraPanel(Panel):
                 option = CardOption(card, card.key in checked, options=options, kind_off=kind_off)
             else:
                 option = CardOption(card, card.key in checked, card_cams.get(card.key, cam_number), cam_count,
-                                    options, kind_off=kind_off)
+                                    options, kind_off=kind_off, cam_names=cam_names)
                 option.cam_chosen.connect(self.card_cam_chosen)
             option.toggled.connect(self.card_toggled)
             self.options[card.key] = option

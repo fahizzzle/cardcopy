@@ -118,8 +118,12 @@ def arrange(w) -> None:
     form.setVerticalSpacing(7)
     form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
     form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+    audio_row = QHBoxLayout()                         # the popup at its natural width, not stretched
+    audio_row.addWidget(w.audio_place)
+    audio_row.addStretch(1)
     for label, row in (("Project name", w.project_edit), ("Raw folder", base_row), ("Uploading", kinds_row),
-                       ("Cam folders", cams_row), ("Also copy", extras_row), ("When full", spill_box)):
+                       ("Audio goes to", audio_row), ("Cam folders", cams_row), ("Also copy", extras_row),
+                       ("When full", spill_box)):
         caption = QLabel(label)
         caption.setStyleSheet(STYLE["soft"])
         form.addRow(caption, row)
