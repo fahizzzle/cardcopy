@@ -1,113 +1,92 @@
-"""One panel per connected device (camera or recorder): its picture, its name, and its cards."""
+"""One panel per connected device (camera or recorder): what it is, its name, and its cards.
+
+Compact on purpose: a coloured badge says Photo, Video or Audio (and is the control that changes it),
+and each card is two lines -- what will be copied, and what is on it.
+"""
 from __future__ import annotations
 
 import datetime as dt
-import os
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPixmap
-from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout)
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout
 
+from . import theme
 from .cameras import Camera, Card
+from .glass import _icon
 from .identify import CopyOptions
 from .progress import human          # still importable from here: ui.py and the tests use it
 from .theme import STYLE, Check, Panel, ink
 from .structure import cam_folder
 
-PICTURE_W, PICTURE_H = 132, 96
+KIND_ICONS = {"photo": "camera", "video": "film", "audio": "audio"}
+# (on a light background, on a dark one): blue for stills, coral for footage, purple for sound
+KIND_COLORS = {"photo": ("#2F6FEB", "#7DB2FF"), "video": ("#E2462A", "#FF8466"), "audio": ("#8A3FD6", "#C79BFF")}
 
 
-def camera_icon(kind: str, label: str) -> QPixmap:
-    """The picture for a device: a stills camera for photo bodies, a cinema camera for video bodies,
-    a field recorder for audio. Drawn here, so it works for every make and model and there is
-    nothing to license."""
-    pix = QPixmap(PICTURE_W, PICTURE_H)
-    pix.fill(Qt.transparent)
-    p = QPainter(pix)
-    p.setRenderHint(QPainter.Antialiasing)
-    body, dark, glass, shine = QColor("#2B2F36"), QColor("#14161A"), QColor("#3D5A80"), QColor("#A9CBE0")
-    p.setPen(Qt.NoPen)
-    if kind == "audio":
-        for side in (-1, 1):                                             # two mic capsules in an X
-            p.save()
-            p.translate(66 + side * 17, 22)
-            p.rotate(side * 26)
-            p.setBrush(dark)
-            p.drawRoundedRect(QRectF(-5, -14, 10, 30), 5, 5)
-            p.setBrush(glass)
-            p.drawEllipse(QRectF(-4, -13, 8, 10))
-            p.restore()
-        p.setBrush(body)
-        p.drawRoundedRect(QRectF(45, 30, 42, 48), 7, 7)                  # recorder body, standing up
-        p.setBrush(dark)
-        p.drawRoundedRect(QRectF(51, 36, 30, 17), 3, 3)                  # screen
-        p.setBrush(glass)
-        for i in range(4):                                               # level meter climbing the screen
-            p.drawRect(QRectF(54 + i * 7, 48 - i * 2.5, 4, 3 + i * 2.5))
-        p.setBrush(QColor("#4A505B"))
-        p.drawEllipse(QRectF(57, 57, 18, 18))                            # transport wheel
-        p.setBrush(QColor("#FF5B3A"))
-        p.drawEllipse(QRectF(63, 63, 6, 6))                              # record button
-    elif kind == "video":
-        p.setBrush(body)
-        p.drawRoundedRect(QRectF(40, 30, 62, 44), 8, 8)                  # body
-        p.drawRoundedRect(QRectF(50, 11, 44, 8), 4, 4)                   # top handle
-        p.drawRect(QRectF(54, 17, 6, 14))
-        p.drawRect(QRectF(84, 17, 6, 14))
-        p.drawRoundedRect(QRectF(100, 36, 20, 17), 4, 4)                 # monitor / viewfinder at the back
-        p.setBrush(dark)
-        p.drawRoundedRect(QRectF(16, 36, 28, 32), 5, 5)                  # lens barrel, pointing left
-        p.drawRoundedRect(QRectF(9, 32, 10, 40), 4, 4)                   # lens hood
-        p.setBrush(glass)
-        p.drawEllipse(QRectF(10, 40, 8, 24))                             # front element, seen from the side
-        p.setBrush(QColor("#FF5B3A"))
-        p.drawEllipse(QRectF(87, 36, 8, 8))                              # record light
-        p.setBrush(QColor("#4A505B"))
-        p.drawRoundedRect(QRectF(48, 52, 30, 14), 3, 3)                  # side panel
-    else:
-        p.setBrush(body)
-        p.drawRoundedRect(QRectF(14, 24, 104, 54), 9, 9)                 # body
-        p.drawRoundedRect(QRectF(48, 12, 36, 16), 4, 4)                  # viewfinder hump
-        p.drawRoundedRect(QRectF(96, 17, 16, 9), 3, 3)                   # shutter button / dial
-        p.setBrush(QColor("#22252B"))
-        p.drawRoundedRect(QRectF(14, 24, 24, 54), 9, 9)                  # grip
-        p.setBrush(dark)
-        p.drawEllipse(QRectF(42, 27, 48, 48))                            # lens barrel
-        p.setBrush(glass)
-        p.drawEllipse(QRectF(52, 37, 28, 28))                            # glass
-        p.setBrush(shine)
-        p.drawEllipse(QRectF(58, 42, 8, 8))                              # highlight
-    p.setPen(QColor("#555B66"))
-    font = QFont()
-    font.setPointSize(8)
-    font.setBold(True)
-    p.setFont(font)
-    p.drawText(QRectF(0, 80, PICTURE_W, 16), Qt.AlignCenter, label[:22])
-    p.end()
-    return pix
+def _dark() -> bool:
+    if theme.NAME == "glass":                # the Windows look is always dark
+        return True
+    from .aqua import is_dark
+    return is_dark()
 
 
-def load_picture(path: str, label: str, kind: str = "photo") -> QPixmap:
-    """The user's own picture of this body when they set one, otherwise the drawn icon for its kind."""
-    pix = QPixmap(path) if path and os.path.isfile(path) else QPixmap()
-    if pix.isNull():
-        return camera_icon(kind, label)
-    pix = pix.scaled(PICTURE_W, PICTURE_H, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-    rounded = QPixmap(pix.size())
-    rounded.fill(Qt.transparent)
-    p = QPainter(rounded)
-    p.setRenderHint(QPainter.Antialiasing)
-    clip = QPainterPath()
-    clip.addRoundedRect(QRectF(0, 0, pix.width(), pix.height()), 8, 8)
-    p.setClipPath(clip)
-    p.drawPixmap(0, 0, pix)
-    p.end()
-    return rounded
+class KindBadge(QComboBox):
+    """What a device is -- Photo, Video or Audio -- as a coloured pill. It is also the menu that sends the
+    device's files to another Raw folder, so it keeps the drop-down's calls (currentIndexChanged ...)."""
+
+    def __init__(self, kinds: list[str], labels: list[str], kind: str) -> None:
+        super().__init__()
+        self.kinds = kinds
+        self.addItems(labels)
+        self.setCurrentIndex(kinds.index(kind) if kind in kinds else 0)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Photo, video or audio device: everything from it goes into this Raw folder. Click to change.")
+
+    def kind(self) -> str:
+        i = self.currentIndex()
+        return self.kinds[i] if 0 <= i < len(self.kinds) else "photo"
+
+    def _font(self) -> QFont:
+        font = QFont(self.font())
+        font.setPixelSize(12)
+        font.setWeight(QFont.DemiBold)
+        return font
+
+    def sizeHint(self) -> QSize:
+        from PySide6.QtGui import QFontMetrics
+        text = QFontMetrics(self._font()).horizontalAdvance(self.kind().capitalize())
+        return QSize(9 + 14 + 6 + text + 8 + 8 + 9, 24)
+
+    minimumSizeHint = sizeHint
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        kind = self.kind()
+        color = QColor(KIND_COLORS.get(kind, KIND_COLORS["photo"])[1 if _dark() else 0])
+        if not self.isEnabled():
+            p.setOpacity(0.5)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        fill = QColor(color)
+        fill.setAlpha(48 if _dark() else 30)
+        p.setPen(Qt.NoPen)
+        p.setBrush(fill)
+        p.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
+        pen = QPen(color, 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        _icon(p, KIND_ICONS.get(kind, "camera"), QRectF(9, (self.height() - 14) / 2, 14, 14))
+        p.setFont(self._font())
+        p.drawText(QRectF(29, 0, self.width() - 29, self.height()), Qt.AlignVCenter | Qt.AlignLeft, kind.capitalize())
+        cx, cy = self.width() - 13.5, self.height() / 2 + 1       # a small chevron: it opens a menu
+        p.drawLine(QPointF(cx - 3, cy - 1.5), QPointF(cx, cy + 1.5))
+        p.drawLine(QPointF(cx, cy + 1.5), QPointF(cx + 3, cy - 1.5))
+        p.end()
 
 
 class CardOption(Panel):
-    """One SD card: a tick box, what is on it, and its copy status."""
+    """One SD card: a tick box, what will be copied, what is on it, and its copy status."""
     toggled = Signal(str, bool)
     cam_chosen = Signal(str, int)
 
@@ -122,7 +101,7 @@ class CardOption(Panel):
         self.check.setChecked(checked)
         self.count = QLabel()                     # "1,284 files · 58.2 GB"
         self.count.setStyleSheet(STYLE["count"])
-        self.count.setWordWrap(True)             # two cards side by side leave little width
+        self.count.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.contents = QLabel()
         self.contents.setWordWrap(True)
         self.contents.setTextFormat(Qt.RichText)
@@ -130,11 +109,16 @@ class CardOption(Panel):
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setStyleSheet(STYLE["status"])
+        self.status.setVisible(False)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        top.addWidget(self.check)
+        top.addStretch(1)
+        top.addWidget(self.count)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 10, 16, 12)
+        lay.setContentsMargins(12, 7, 12, 8)
         lay.setSpacing(1)
-        lay.addWidget(self.check)
-        lay.addWidget(self.count)
+        lay.addLayout(top)
         lay.addWidget(self.contents)
         self.combo = None
         if cam_count:                             # SD cards view: each card picks its own Cam folder
@@ -148,10 +132,8 @@ class CardOption(Panel):
             into.addWidget(self.combo, 1)
             lay.addLayout(into)
         lay.addWidget(self.status)
-        lay.addStretch(1)
-        self.setMinimumWidth(186)
-        self.setMaximumWidth(340)
-        self.setMinimumHeight(PICTURE_H + 20)
+        self.setMinimumWidth(220)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.kind_off = kind_off
         self._locked = False
         self.check.toggled.connect(self._on_toggled)
@@ -193,9 +175,9 @@ class CardOption(Panel):
         media, size = info.selected(options)
         if self.kind_off:
             # the Uploading row decides this, not the card: say so rather than promise a copy
-            self.count.setText(f"Not copying\n{self.kind_off} is switched off")
+            self.count.setText(f"Not copying: {self.kind_off} is off")
         else:
-            self.count.setText(f"Will copy {media:,} file{'' if media == 1 else 's'}\n{human(size)}" if media
+            self.count.setText(f"{media:,} file{'' if media == 1 else 's'}  ·  {human(size)}" if media
                                else "Nothing to copy")
         copied, left = [], []
         for count, nbytes, label, wanted in ((info.raws, info.raw_size, "RAW", True),
@@ -205,20 +187,24 @@ class CardOption(Panel):
                                               "recording" if info.audios == 1 else "recordings", True),
                                              (info.xmls, info.xml_size, "clip XML", options.xml)):
             if count and wanted:
-                copied.append(f"{count:,} {label}  ·  {human(nbytes)}")
+                copied.append(f"{count:,} {label} ({human(nbytes)})")
             elif count:
                 left.append(f"{count:,} {label}")
-        rows = [f"<span style='color:{ink()}'>{row}</span>" for row in copied]
+        lines = [f"<span style='color:{ink()}'>{'  ·  '.join(copied)}</span>"] if copied else []
+        more = []
         if left:
-            rows.append("Not copied: " + ", ".join(left))
+            more.append("not copied: " + ", ".join(left))
         if not (copied or left):
-            rows.append("no photos, videos or recordings on this card")
+            more.append("no photos, videos or recordings on this card")
         if info.newest:
-            rows.append(f"last shot {dt.datetime.fromtimestamp(info.newest):%d %b %H:%M}")
-        self.contents.setText("<br>".join(rows))
+            more.append(f"last shot {dt.datetime.fromtimestamp(info.newest):%d %b %H:%M}")
+        if more:
+            lines.append("  ·  ".join(more))
+        self.contents.setText("<br>".join(lines))
 
     def set_status(self, text: str) -> None:
         self.status.setText(text)
+        self.status.setVisible(bool(text))
 
     def _apply_enabled(self) -> None:
         self.check.setEnabled(not self._locked and not self.kind_off)
@@ -244,9 +230,8 @@ class CameraPanel(Panel):
     kind_chosen = Signal(str, str)
     card_cam_chosen = Signal(str, int)
     rename_requested = Signal(str)
-    picture_requested = Signal(str)
 
-    def __init__(self, cam: Camera, cam_number: int, cam_count: int, picture: str, checked: set[str],
+    def __init__(self, cam: Camera, cam_number: int, cam_count: int, checked: set[str],
                  kind: str = "photo", kind_labels: dict[str, str] | None = None,
                  card_cams: dict[str, int] | None = None, options: CopyOptions | None = None,
                  kind_off: str = "", cam_names: list[str] | None = None) -> None:
@@ -255,45 +240,33 @@ class CameraPanel(Panel):
         self.options: dict[str, CardOption] = {}
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        self.picture = QLabel()
-        self.picture.setFixedSize(PICTURE_W, PICTURE_H)
-        self.picture.setAlignment(Qt.AlignCenter)
-        self._picture_path, self._label = picture, cam.default_name
-        self.picture.setPixmap(load_picture(picture, cam.default_name, kind))
-        tile = Panel(radius=16, light=True)      # dark camera bodies need a bright tile to show up
-        tile_lay = QVBoxLayout(tile)
-        tile_lay.setContentsMargins(8, 8, 8, 8)
-        tile_lay.addWidget(self.picture)
-
+        labels = kind_labels or {"photo": "Raw Photo", "video": "Raw Video", "audio": "Raw Audio"}
+        self.kinds = list(labels)
+        self.kind_combo = KindBadge(self.kinds, [labels[k] for k in self.kinds], kind)
         name = QLabel(cam.name)
         name.setStyleSheet(STYLE["camera_name"])
-        sub = QLabel(cam.default_name if cam.name != cam.default_name else cam.model)
+        detail = cam.default_name if cam.name != cam.default_name else cam.model
+        sub = QLabel(detail if detail != cam.name else "")
         sub.setStyleSheet(STYLE["soft"])
+        name.setToolTip(detail or cam.model)
+        self.rename_btn = _link("Rename")
         self.combo = QComboBox()
         self.combo.addItems(cam_names or [cam_folder(n) for n in range(1, cam_count + 1)])   # Cam 1 … or Audio
         self.combo.setCurrentIndex(cam_number - 1)
-        self.rename_btn = _link("Rename")
-        self.picture_btn = _link("Picture")
-        head = QHBoxLayout()
-        head.setContentsMargins(4, 0, 2, 6)
-        head.setSpacing(8)
-        head.addWidget(name)
-        name.setToolTip(sub.text() or cam.model)
-        head.addWidget(self.rename_btn)
-        head.addWidget(self.picture_btn)
-        head.addStretch(1)
-        self.kind_combo = QComboBox()
-        self.kinds = list(kind_labels or {"photo": "Raw Photo", "video": "Raw Video", "audio": "Raw Audio"})
-        self.kind_combo.addItems([(kind_labels or {}).get(k, k) for k in self.kinds])
-        self.kind_combo.setCurrentIndex(self.kinds.index(kind) if kind in self.kinds else 0)
-        self.kind_combo.setToolTip("Everything from this device goes into this Raw folder")
-        head.addWidget(self.kind_combo)
-        head.addWidget(self.combo)
+        self.combo.setToolTip("The folder this device's files go into")
         self.combo.setVisible(card_cams is None)   # SD cards view chooses per card instead
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(8)
+        head.addWidget(self.kind_combo)
+        head.addWidget(name)
+        head.addWidget(sub)
+        head.addWidget(self.rename_btn)
+        head.addStretch(1)
+        head.addWidget(self.combo)
 
         row = QHBoxLayout()
         row.setSpacing(8)
-        row.addWidget(tile, 0, Qt.AlignTop)
         for card in cam.cards:
             if card_cams is None:
                 option = CardOption(card, card.key in checked, options=options, kind_off=kind_off)
@@ -304,26 +277,23 @@ class CameraPanel(Panel):
             option.toggled.connect(self.card_toggled)
             self.options[card.key] = option
             row.addWidget(option, 1)
-        if len(cam.cards) == 1:
-            row.addStretch(1)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 12, 16, 14)
-        lay.setSpacing(0)
+        lay.setContentsMargins(14, 10, 14, 12)
+        lay.setSpacing(8)
         lay.addLayout(head)
         lay.addLayout(row)
 
         self.combo.currentIndexChanged.connect(lambda i: self.cam_chosen.emit(self.identity, i + 1))
         self.kind_combo.currentIndexChanged.connect(self._on_kind_changed)
         self.rename_btn.clicked.connect(lambda: self.rename_requested.emit(self.identity))
-        self.picture_btn.clicked.connect(lambda: self.picture_requested.emit(self.identity))
 
     def _on_kind_changed(self, index: int) -> None:
-        self.picture.setPixmap(load_picture(self._picture_path, self._label, self.kinds[index]))   # the icon follows the role
+        self.kind_combo.updateGeometry()          # "Audio" and "Photo" are not the same width
         self.kind_chosen.emit(self.identity, self.kinds[index])
 
     def set_locked(self, locked: bool) -> None:
-        for w in (self.combo, self.kind_combo, self.rename_btn, self.picture_btn):
+        for w in (self.combo, self.kind_combo, self.rename_btn):
             w.setEnabled(not locked)
         for option in self.options.values():
             option.set_locked(locked)

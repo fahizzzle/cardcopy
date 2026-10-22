@@ -28,8 +28,6 @@ from .theme import (ASSETS, COMPUTER, FILE_MANAGER, MAC, STYLE, ActionButton, Ba
 from .structure import (AUDIO_FOLDER, KINDS, Plan, build_plan, cam_folders, copy_jobs, create_folders, overlapping,
                         project_path, spill_path)
 
-PICTURE_FILTER = "Pictures (*.png *.jpg *.jpeg *.webp *.bmp)"
-
 
 def render_plan(plan: Plan, base: str, notes: dict[str, list[str]]) -> str:
     """Indented folder tree, in the order the folders will be created."""
@@ -807,7 +805,7 @@ class MainWindow(QMainWindow):
         for index, cam in enumerate(self.view):
             kind = self._kind_of(cam)
             panel = CameraPanel(cam, self._cam_of(cam), self._cam_count(kind),
-                                self.settings["camera_pictures"].get(cam.identity, ""), self.checked,
+                                self.checked,
                                 kind, self._kind_labels(),
                                 self.card_cam if cards_mode else None, self._options(),
                                 self._kind_off(cam),
@@ -817,7 +815,6 @@ class MainWindow(QMainWindow):
             panel.cam_chosen.connect(self._on_cam_chosen)
             panel.kind_chosen.connect(self._on_kind_chosen)
             panel.rename_requested.connect(self._rename_camera)
-            panel.picture_requested.connect(self._set_picture)
             panel.set_locked(self.copying)
             self.panels.append(panel)
             self.camera_list.addWidget(panel, index // 2, index % 2, Qt.AlignTop)   # _flow_cameras() settles the columns
@@ -959,15 +956,6 @@ class MainWindow(QMainWindow):
             names[identity] = name.strip()
         else:
             names.pop(identity, None)
-        self._save_settings()
-        self._rebuild_cameras()
-
-    def _set_picture(self, identity: str) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Picture of this device", "", PICTURE_FILTER)
-        if not path:
-            return
-        # remembered per camera body; the picture file itself is only read
-        self.settings["camera_pictures"][identity] = os.path.normpath(path)
         self._save_settings()
         self._rebuild_cameras()
 
