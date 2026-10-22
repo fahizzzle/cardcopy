@@ -110,21 +110,34 @@ def test_recorder_microsd_in_the_cameras_reader_gets_its_own_tile(app, tmp_path,
 
 
 @pytest.mark.parametrize("look", ["glass", "mac"])
-def test_audio_can_go_into_the_projects_raw_video_folder(app, tmp_path, monkeypatch, look):
+def test_audio_goes_into_the_projects_raw_video_folder_by_default(app, tmp_path, monkeypatch, look):
     window = _window(tmp_path, monkeypatch, look)
     try:
         window.project_edit.setText("bob")
-        window.audio_place.setCurrentIndex(1)
-        assert window.settings["audio_in_video"] is True
+        assert window.audio_place.currentData() == "with_video"
         preview = window.preview.toPlainText()
         assert "Raw Audio" not in preview and f"Audio{os.sep}   <-- " in preview      # the Zoom card's line
         zoom = next(p for p in window.panels if p.kind_combo.currentText().endswith("Audio"))
         assert zoom.combo.itemText(0) == "Audio"
+        assert window.open_audio_btn.isHidden()                       # no Raw Audio folder to offer
         window.folders_btn.click()                                   # Create folders only
         assert os.path.isdir(os.path.join(window.base_edit.text(), "Raw Video", "bob", "Audio"))
         assert not os.path.exists(os.path.join(window.base_edit.text(), "Raw Audio"))
+        window.audio_place.setCurrentIndex(window.audio_place.findData("raw_audio"))     # the old layout, on request
+        assert window.settings["audio_place"] == "raw_audio"
+        assert f"Raw Audio{os.sep}" in window.preview.toPlainText()
     finally:
         window.close()
+
+
+def test_an_old_separate_audio_setting_is_not_carried_over(app, tmp_path, monkeypatch):
+    """The first previews saved "audio_in_video": false by default; that must not keep audio apart."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "settings.json").write_text(json.dumps({"audio_in_video": False}))
+    monkeypatch.setenv("CARDCOPY_HOME", str(home))
+    from cardcopy import settings
+    assert settings.load()["audio_place"] == "with_video"
 
 
 def test_eject_never_takes_the_disk_the_raw_folder_is_on(app, tmp_path, monkeypatch):

@@ -182,8 +182,8 @@ class MainWindow(QMainWindow):
                                     "recorder's card is plugged in; \"Audio goes to\" says where its recordings land.")
         names = self.settings["kind_folders"]
         self.audio_place = QComboBox()       # where a recorder's files go
+        self.audio_place.addItem(f"{names['video']}  ›  project  ›  {AUDIO_FOLDER}", "with_video")
         self.audio_place.addItem(f"{names['audio']}  ›  project  ›  Cam 1", "raw_audio")
-        self.audio_place.addItem(f"{names['video']}  ›  project  ›  {AUDIO_FOLDER}", "in_video")
         self.audio_place.setToolTip("Recordings in a Raw Audio folder of their own, or beside the footage: an "
                                     f"{AUDIO_FOLDER} folder inside the project's {names['video']} folder "
                                     f"({AUDIO_FOLDER} 1, {AUDIO_FOLDER} 2 … with several recorders).")
@@ -494,7 +494,7 @@ class MainWindow(QMainWindow):
             spin.setValue(int(s["cam_counts"].get(kind, 0)))
             spin.blockSignals(False)
         self.audio_place.blockSignals(True)
-        self.audio_place.setCurrentIndex(1 if s.get("audio_in_video") else 0)
+        self.audio_place.setCurrentIndex(max(self.audio_place.findData(s.get("audio_place", "with_video")), 0))
         self.audio_place.blockSignals(False)
         self.base_edit.setText(s["base"])
         self.spill_edit.setText(s["spill_base"])
@@ -530,7 +530,8 @@ class MainWindow(QMainWindow):
         s["shutdown_at"] = self.shutdown_at.time().toString("HH:mm")
         s["copy_jpeg"] = self.jpeg_check.isChecked()
         s["copy_xml"] = self.xml_check.isChecked()
-        s["audio_in_video"] = self._audio_in_video()
+        s["audio_place"] = self.audio_place.currentData()
+        s.pop("audio_in_video", None)            # the old name, from the first Mac previews
         try:
             settings_mod.save(s)
         except OSError as exc:
@@ -1031,7 +1032,7 @@ class MainWindow(QMainWindow):
 
     def _audio_in_video(self) -> bool:
         """Recordings go into the project's Raw Video folder (…\\Raw Video\\<project>\\Audio)."""
-        return self.audio_place.currentData() == "in_video"
+        return self.audio_place.currentData() == "with_video"
 
     def _audio_destination(self) -> str:
         names = self.settings["kind_folders"]
@@ -1081,6 +1082,9 @@ class MainWindow(QMainWindow):
             exists = bool(path) and os.path.isdir(path)
             button.setEnabled(exists)
             button.setToolTip(path if exists else (f"Not there yet: {path}" if path else "Enter a project name first"))
+            if button is self.open_audio_btn:
+                # recordings kept with the video have no Raw Audio folder: only offer one that exists from before
+                button.setVisible(not self._audio_in_video() or exists)
 
     def _open_folder(self, button) -> None:
         path = self._open_targets().get(button, "")

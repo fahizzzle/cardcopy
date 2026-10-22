@@ -14,7 +14,9 @@ DEFAULTS = {
     "spill_base": "",       # the backup folder; the same Raw Photo/Video/Audio layout is made inside it
     "kind_folders": dict(DEFAULT_KIND_FOLDERS),
     "kinds": {"photo": True, "video": True, "audio": False},   # audio ticks itself when a recorder turns up
-    "audio_in_video": False,  # recordings into Raw Video\<project>\Audio instead of Raw Audio\<project>\Cam N
+    # Where recordings go: "with_video" = Raw Video\<project>\Audio, beside the footage they belong to;
+    # "raw_audio" = Raw Audio\<project>\Cam N. (A new name: an older "audio_in_video": false is not carried over.)
+    "audio_place": "with_video",
     "copy_jpeg": False,     # photos: RAW only unless this is on
     "copy_xml": False,      # video: clips only unless this is on
     "cam_counts": {"photo": 0, "video": 0, "audio": 0},   # Cam folders per Raw folder; 0 = one per device
