@@ -6,6 +6,8 @@ import re
 ROOT = os.path.dirname(os.path.abspath(SPECPATH))
 with open(os.path.join(ROOT, "cardcopy", "__init__.py"), encoding="utf-8") as f:
     VERSION = re.search(r'__version__ = "([^"]+)"', f.read()).group(1)
+# CFBundleVersion grows with every build (the GitHub run number), so two builds of 1.20.0 are told apart
+BUILD_NUMBER = os.environ.get("CARDCOPY_BUILD_NUMBER", "0")
 
 a = Analysis(
     [os.path.join(SPECPATH, "launch.py")],
@@ -31,7 +33,7 @@ app = BUNDLE(
         "CFBundleName": "CardCopy",
         "CFBundleDisplayName": "CardCopy",
         "CFBundleShortVersionString": VERSION,
-        "CFBundleVersion": VERSION,
+        "CFBundleVersion": f"{VERSION}.{BUILD_NUMBER}",
         "LSMinimumSystemVersion": "13.0",
         "LSApplicationCategoryType": "public.app-category.photography",
         "NSHumanReadableCopyright": "© 2026 Framed Horizon LLC",

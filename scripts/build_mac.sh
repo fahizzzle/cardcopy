@@ -60,8 +60,19 @@ pkgroot=build/pkgroot
 rm -rf "$pkgroot" dist/CardCopy-Installer.pkg && mkdir -p "$pkgroot/Applications"
 ditto dist/CardCopy.app "$pkgroot/Applications/CardCopy.app"
 pkgbuild --analyze --root "$pkgroot" build/component.plist >/dev/null
-plutil -replace 0.BundleIsRelocatable -bool NO build/component.plist
-plutil -replace 0.BundleOverwriteAction -string upgrade build/component.plist
+# Every bundle the analysis found (the app, and the Qt frameworks inside it): installed exactly where the
+# package says, always replacing what is there. Relocatable, Installer "upgrades" any other copy it knows
+# of (one left in Downloads, the opened .dmg) and leaves the one in Applications as it was.
+"$PYTHON" - build/component.plist <<'PY'
+import plistlib, sys
+with open(sys.argv[1], "rb") as f:
+    bundles = plistlib.load(f)
+for bundle in bundles:
+    bundle.update(BundleIsRelocatable=False, BundleIsVersionChecked=False, BundleOverwriteAction="upgrade")
+with open(sys.argv[1], "wb") as f:
+    plistlib.dump(bundles, f)
+print(f"{len(bundles)} bundle(s) pinned to their install location")
+PY
 pkgbuild --root "$pkgroot" --component-plist build/component.plist --identifier com.framedhorizon.cardcopy \
   --version "$version" --install-location / build/CardCopy-component.pkg >/dev/null
 productbuild --package build/CardCopy-component.pkg --identifier com.framedhorizon.cardcopy.installer \
