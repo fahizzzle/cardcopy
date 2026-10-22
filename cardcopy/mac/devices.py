@@ -191,27 +191,51 @@ def find_cards() -> list[Volume]:
 
 # ------------------------------------------------------------------- eject
 
-def eject_volume(root: str, tries: int = 3) -> tuple[bool, str]:
+def ejectable(volume: Volume) -> bool:
+    """A card's disk, as opposed to anything that must never be ejected by CardCopy: this Mac's own disk,
+    a mounted disk image, or an internal fixed disk. Card readers in USB-C hubs often call their cards
+    "fixed" rather than "removable", so an external disk counts too (CardCopy only ever lists volumes
+    that look like camera cards, and the window keeps the Raw and backup folders' disks out of it)."""
+    facts = volume.facts
+    if facts.get("boot") or facts.get("virtual"):
+        return False
+    return volume.drive_type == DRIVE_REMOVABLE or bool(facts.get("ejectable")) or not facts.get("internal", True)
+
+
+def _holder(text: str) -> str:
+    """The app diskutil says is keeping a disk busy ("dissented by PID 812 (Photos)"), or ''."""
+    m = re.search(r"dissented by PID (\d+)(?: \(([^)]+)\))?", text)
+    if not m:
+        return ""
+    if m.group(2):
+        return os.path.basename(m.group(2))
+    out = _run(["ps", "-p", m.group(1), "-o", "comm="], 5).decode("utf-8", "replace").strip()
+    return os.path.basename(out) or f"process {m.group(1)}"
+
+
+def eject_volume(root: str, tries: int = 4) -> tuple[bool, str]:
     """Safely remove one card: unmount it and eject its disk, like Finder's Eject. Nothing is written
     to the card beyond what unmounting itself does. Returns (ok, message).
 
-    Hard rule: only ever removable media. This Mac's disk, an external drive, a disk image or a
-    network share is refused.
+    Hard rule: never this Mac's own disk, an internal disk, a disk image or a network share. Never
+    forced either: a card something is still reading stays mounted, and the message says what has it.
     """
     import time
     if os.environ.get("CARDCOPY_NO_DEVICES"):
         return False, "ejecting is switched off"
+    if not os.path.ismount(root):
+        return True, "already ejected"                     # went with the other card in the same reader
     info = disk_info(root)
     if not info:
-        return False, "not a disk"
+        return False, "macOS has no disk for it (a network share?), left alone"
     volume = volume_from_info(root, info)
-    if volume.drive_type != DRIVE_REMOVABLE or volume.facts["boot"] or volume.facts["virtual"]:
-        return False, "not a removable card, left alone"
+    if not ejectable(volume):
+        return False, "not a card's disk, left alone"
     whole = volume.facts["whole"] or volume.facts["bsd"]
     if not re.fullmatch(r"disk\d+(s\d+)?", whole):
         return False, "not a disk"
-    message = ""
-    for attempt in range(tries):                 # something may still be reading: give it a moment
+    text = ""
+    for attempt in range(tries):                 # Spotlight or a preview may still be reading: give it a moment
         try:
             out = subprocess.run(["diskutil", "eject", whole], capture_output=True, text=True, timeout=90,
                                  stdin=subprocess.DEVNULL)
@@ -219,10 +243,15 @@ def eject_volume(root: str, tries: int = 3) -> tuple[bool, str]:
             return False, f"diskutil did not answer ({exc})"
         if out.returncode == 0:
             return True, "ejected, safe to remove"
-        lines = (out.stderr or out.stdout or "").strip().splitlines()
-        message = lines[-1] if lines else ""
+        if not os.path.ismount(root):
+            return True, "ejected, safe to remove"         # the volume went even though diskutil complained
+        text = f"{out.stdout}\n{out.stderr}".strip()
         if attempt + 1 < tries:
-            time.sleep(1.0)
-    if re.search(r"dissent|in use|busy|could not be unmounted", message, re.I):
+            time.sleep(1.5)
+    holder = _holder(text)
+    if holder:
+        return False, f"{holder} is using it: quit {holder} (or close its window) and eject again"
+    if re.search(r"dissent|in use|busy|could not be unmounted", text, re.I):
         return False, "still in use by another app (close Finder windows or players showing it)"
-    return False, message or "macOS would not eject it"
+    lines = text.splitlines()
+    return False, (lines[-1] if lines else "") or "macOS would not eject it"

@@ -67,13 +67,53 @@ def test_parse_usb_survives_junk():
     assert mac_devices.parse_usb(None) == {} and mac_devices.parse_usb([{"nothing": 1}]) == {}
 
 
-def test_eject_refuses_anything_but_removable_media(monkeypatch, tmp_path):
+def test_eject_refuses_the_macs_own_disks_and_disk_images(monkeypatch, tmp_path):
     monkeypatch.delenv("CARDCOPY_NO_DEVICES", raising=False)
+    monkeypatch.setattr(mac_devices.os.path, "ismount", lambda p: True)
     ran = []
     monkeypatch.setattr(mac_devices.subprocess, "run", lambda *a, **k: ran.append(a))
-    monkeypatch.setattr(mac_devices, "disk_info", lambda root: {**SD_CARD, "RemovableMedia": False, "Removable": False})
-    ok, why = mac_devices.eject_volume(str(tmp_path))
-    assert not ok and "left alone" in why and ran == []
+    for info in ({**SD_CARD, "VirtualOrPhysical": "Virtual"},                                   # a .dmg
+                 {**SD_CARD, "RemovableMedia": False, "Removable": False, "Ejectable": False, "Internal": True}):
+        monkeypatch.setattr(mac_devices, "disk_info", lambda root, info=info: info)
+        ok, why = mac_devices.eject_volume(str(tmp_path))
+        assert not ok and "left alone" in why
+    monkeypatch.setattr(mac_devices, "on_boot_disk", lambda root: True)
+    monkeypatch.setattr(mac_devices, "disk_info", lambda root: SD_CARD)
+    assert not mac_devices.eject_volume(str(tmp_path))[0]
+    assert ran == []
+
+
+def test_eject_takes_a_card_its_hub_calls_fixed(monkeypatch, tmp_path):
+    """USB-C hub readers often report their cards as fixed disks; they are still cards."""
+    monkeypatch.delenv("CARDCOPY_NO_DEVICES", raising=False)
+    monkeypatch.setattr(mac_devices.os.path, "ismount", lambda p: True)
+
+    class Done:
+        returncode, stdout, stderr = 0, "Disk disk6 ejected", ""
+    monkeypatch.setattr(mac_devices.subprocess, "run", lambda args, **k: Done())
+    monkeypatch.setattr(mac_devices, "disk_info", lambda root: {**SD_CARD, "RemovableMedia": False, "Removable": False,
+                                                                 "Ejectable": True, "Internal": False})
+    assert mac_devices.eject_volume(str(tmp_path)) == (True, "ejected, safe to remove")
+
+
+def test_eject_says_which_app_is_holding_the_card(monkeypatch, tmp_path):
+    monkeypatch.delenv("CARDCOPY_NO_DEVICES", raising=False)
+    monkeypatch.setattr(mac_devices.os.path, "ismount", lambda p: True)
+
+    class Busy:
+        returncode, stdout = 1, ""
+        stderr = ("Unmount of disk4 failed: at least one volume could not be unmounted\n"
+                  "Unmount was dissented by PID 812 (Photos)")
+    monkeypatch.setattr(mac_devices.subprocess, "run", lambda args, **k: Busy())
+    monkeypatch.setattr(mac_devices, "disk_info", lambda root: SD_CARD)
+    ok, why = mac_devices.eject_volume(str(tmp_path), tries=1)
+    assert not ok and why.startswith("Photos is using it")
+
+
+def test_a_card_already_gone_counts_as_ejected(monkeypatch, tmp_path):
+    monkeypatch.delenv("CARDCOPY_NO_DEVICES", raising=False)
+    monkeypatch.setattr(mac_devices.os.path, "ismount", lambda p: False)
+    assert mac_devices.eject_volume(str(tmp_path)) == (True, "already ejected")
 
 
 def test_eject_runs_diskutil_on_the_whole_disk(monkeypatch, tmp_path):
@@ -84,6 +124,7 @@ def test_eject_runs_diskutil_on_the_whole_disk(monkeypatch, tmp_path):
         returncode, stdout, stderr = 0, "Disk disk4 ejected", ""
     monkeypatch.setattr(mac_devices.subprocess, "run", lambda args, **k: calls.append(args) or Done())
     monkeypatch.setattr(mac_devices, "disk_info", lambda root: SD_CARD)
+    monkeypatch.setattr(mac_devices.os.path, "ismount", lambda p: True)
     assert mac_devices.eject_volume(str(tmp_path)) == (True, "ejected, safe to remove")
     assert calls == [["diskutil", "eject", "disk4"]]
 

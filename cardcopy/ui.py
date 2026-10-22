@@ -1799,10 +1799,20 @@ class MainWindow(QMainWindow):
         return [c for c in self.cards if c.volume.letter]          # folders added by hand are not devices
 
     def _eject_all(self, then=None) -> None:
-        """Eject every connected card in the background; `then` runs afterwards on the GUI thread."""
-        roots = [c.volume.root for c in self._real_cards()]
+        """Eject every connected card in the background; `then` runs afterwards on the GUI thread.
+
+        Never the disk the Raw folder or the backup folder is on, even if it looks like a card: that is
+        where the copy went, and Google Drive or the next copy still needs it.
+        """
         if self.copying:
             return
+        keep = [f for f in (self.base_edit.text().strip(), self._spill_base()) if f and os.path.isdir(f)]
+        roots = []
+        for card in self._real_cards():
+            if any(gdrive.same_volume(card.volume.root, folder) for folder in keep):
+                self._log(f"{card.volume.letter}  left connected: the Raw or backup folder is on it")
+            else:
+                roots.append(card.volume.root)
         if not roots:
             self._log("No cards to eject.")
             if then is not None:
@@ -1810,7 +1820,7 @@ class MainWindow(QMainWindow):
             return
         self._after_eject = then
         self.eject_btn.setEnabled(False)
-        self._log("Ejecting " + ", ".join(c.volume.letter for c in self._real_cards()) + "…")
+        self._log("Ejecting " + ", ".join(c.volume.letter for c in self._real_cards() if c.volume.root in roots) + "…")
 
         def work() -> None:
             self.signals.ejected.emit([(root, *self.eject_volume(root)) for root in roots])

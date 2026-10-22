@@ -127,6 +127,23 @@ def test_audio_can_go_into_the_projects_raw_video_folder(app, tmp_path, monkeypa
         window.close()
 
 
+def test_eject_never_takes_the_disk_the_raw_folder_is_on(app, tmp_path, monkeypatch):
+    from cardcopy.cameras import Card
+    from cardcopy.devices import DRIVE_REMOVABLE, Volume
+    window = _window(tmp_path, monkeypatch, "glass")
+    try:
+        on_raw_disk = tmp_path / "card"                    # tmp_path is the Raw folder's disk too
+        on_raw_disk.mkdir()
+        window.cards = [Card(Volume(root=str(on_raw_disk), label="X", drive_type=DRIVE_REMOVABLE))]
+        asked = []
+        window.eject_volume = lambda root: asked.append(root) or (True, "ejected")
+        window._eject_all()
+        QApplication.processEvents()
+        assert asked == [] and "left connected" in window.log.toPlainText()
+    finally:
+        window.close()
+
+
 def test_mac_appearance_switches_palette(app, monkeypatch):
     from cardcopy import aqua
     monkeypatch.setenv("CARDCOPY_APPEARANCE", "dark")
