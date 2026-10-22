@@ -13,11 +13,13 @@ Copies camera SD cards into `Raw Photo|Video|Audio\<Project>\Cam N` folders. Pyt
 - `CARDCOPY_THEME=mac` previews the Mac look on Windows; `CARDCOPY_APPEARANCE=light|dark` pins it.
 
 ## Environment (Windows dev PC)
+- Checkout: `C:\Users\Fahim\dev\cardcopy` (not on Google Drive: a git folder there vanished once).
 - No system Python: venv `%USERPROFILE%\.venvs\cardcopy` made with `uv` (`UV_NATIVE_TLS=1`, Avast intercepts HTTPS). Tests: `%USERPROFILE%\.venvs\cardcopy\Scripts\python.exe -m pytest`. Run Python with the sandbox disabled.
 - Screenshots of the window on made-up cards: `scripts/screenshot.py OUT [--appearance both]` (offscreen needs `QT_QPA_FONTDIR=C:/Windows/Fonts`).
 - Git identity in this repo is the GitHub no-reply address (public history).
 
 ## Builds
-- Mac: `.github/workflows/build.yml` runs the tests on Windows and macOS, then `scripts/build_mac.sh` on macos-15: PyInstaller (`mac/CardCopy.spec`, Info.plist usage strings there) -> ad-hoc signed `CardCopy.app`, opened once with `CARDCOPY_SELFTEST` to prove it starts, then `CardCopy-Installer.pkg` (installs into /Applications), `CardCopy-mac.dmg` / `.zip` and screenshots. Pushes to `mac` replace the `mac-preview` pre-release (never "latest"). Not notarized (no Developer ID yet).
+- Mac: `.github/workflows/build.yml` runs the tests on Windows and macOS, then `scripts/build_mac.sh` on macos-15: PyInstaller (`mac/CardCopy.spec`, Info.plist usage strings there) -> ad-hoc signed `CardCopy.app`, opened once with `CARDCOPY_SELFTEST` to prove it starts, then `CardCopy-Installer.pkg` (installs into /Applications), `CardCopy-mac.dmg` / `.zip` and screenshots. Pushes to `mac` update the `mac-preview` pre-release in place (never "latest"), feed `latest-mac.json` uploaded last.
+- Mac updates: the build writes `cardcopy/assets/build.json` (number = GitHub run number, commit, channel); `updates.check` compares version then build number, and a "preview" build also reads the mac-preview feed. `mac/selfupdate.py` installs the downloaded, sha256-checked .pkg after CardCopy quits (one admin password prompt via osascript), then reopens it. Not notarized (no Developer ID yet).
 - Windows: the release zip = embedded Python 3.11.9 + PySide6 + `cardcopy/` + `windows/` scripts. The original build/release scripts were not recovered; recreate them before the next Windows release. No PyInstaller/exe on Windows (Avast).
 - App icon: `mac/AppIcon.png` from `scripts/make_icon.py`; the build makes the .icns.

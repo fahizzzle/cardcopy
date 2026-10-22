@@ -3,6 +3,7 @@
 #
 #   CardCopy.app          the app, ad-hoc signed
 #   CardCopy-Installer.pkg  a regular installer that puts the app in Applications (what people download)
+#   latest-mac.json       the update feed for that installer (only with CARDCOPY_DOWNLOAD_BASE set)
 #   CardCopy-mac.dmg      drag-to-Applications disk image
 #   CardCopy-mac.zip      the app zipped with ditto (keeps the bundle's links and permissions)
 #   screenshots/          the packaged app's own window, opened once to prove it starts, plus the
@@ -26,8 +27,20 @@ done
 iconutil -c icns build/AppIcon.iconset -o mac/AppIcon.icns
 
 echo "== app"
-# the commit this build comes from, shown beside the version (Settings, sidebar, diagnostic report)
-git rev-parse --short HEAD > cardcopy/assets/build.txt 2>/dev/null || echo dev > cardcopy/assets/build.txt
+# What the app knows about itself (cardcopy/__init__.py): the build number the update check compares, the
+# commit (diagnostic report), and the channel ("preview" also follows the mac-preview pre-release).
+"$PYTHON" - <<'PY'
+import json, os, subprocess
+try:
+    commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+except OSError:
+    commit = ""
+info = {"number": int(os.environ.get("CARDCOPY_BUILD_NUMBER") or 0), "commit": commit or "dev",
+        "channel": os.environ.get("CARDCOPY_CHANNEL", "dev")}
+with open("cardcopy/assets/build.json", "w", encoding="utf-8") as f:
+    json.dump(info, f)
+print("build", info)
+PY
 rm -rf dist/CardCopy.app dist/CardCopy
 "$PYTHON" -m PyInstaller --noconfirm --clean --distpath dist --workpath build/pyinstaller mac/CardCopy.spec
 codesign --force --deep --sign - dist/CardCopy.app
@@ -77,6 +90,29 @@ pkgbuild --root "$pkgroot" --component-plist build/component.plist --identifier 
   --version "$version" --install-location / build/CardCopy-component.pkg >/dev/null
 productbuild --package build/CardCopy-component.pkg --identifier com.framedhorizon.cardcopy.installer \
   --version "$version" dist/CardCopy-Installer.pkg >/dev/null
+
+echo "== update feed"
+# latest-mac.json beside the installer: what installed copies read to offer "Update now" (updates.py).
+# CARDCOPY_DOWNLOAD_BASE is where the release will serve the files from; without it there is no feed.
+"$PYTHON" - <<'PY'
+import hashlib, json, os, subprocess
+import cardcopy
+base = os.environ.get("CARDCOPY_DOWNLOAD_BASE", "").rstrip("/")
+if not base:
+    print("(no CARDCOPY_DOWNLOAD_BASE: no latest-mac.json)")
+    raise SystemExit
+digest = hashlib.sha256()
+with open("dist/CardCopy-Installer.pkg", "rb") as f:
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+        digest.update(chunk)
+notes = subprocess.run(["git", "log", "-1", "--format=%s"], capture_output=True, text=True).stdout.strip()
+feed = {"version": cardcopy.__version__, "build": int(os.environ.get("CARDCOPY_BUILD_NUMBER") or 0),
+        "url": f"{base}/CardCopy-Installer.pkg", "zip": f"{base}/CardCopy-Installer.pkg",
+        "sha256": digest.hexdigest(), "notes": notes}
+with open("dist/latest-mac.json", "w", encoding="utf-8") as f:
+    json.dump(feed, f, indent=2)
+print(json.dumps(feed, indent=2))
+PY
 
 echo "== disk image and zip"
 stage=build/dmg

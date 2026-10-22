@@ -14,7 +14,7 @@ a = Analysis(
     pathex=[ROOT],
     datas=[(os.path.join(ROOT, "cardcopy", "assets"), os.path.join("cardcopy", "assets"))],
     hiddenimports=["cardcopy.mac_window", "cardcopy.mac.devices", "cardcopy.mac.power", "cardcopy.mac.gdrive",
-                   "cardcopy.mac.native"],
+                   "cardcopy.mac.native", "cardcopy.mac.selfupdate"],
     excludes=["tkinter", "unittest", "pydoc", "PySide6.QtNetwork", "PySide6.QtQml", "PySide6.QtQuick",
               "PySide6.QtOpenGL", "PySide6.QtSql", "PySide6.QtTest", "PySide6.QtDBus", "PySide6.QtPdf"],
     noarchive=False,

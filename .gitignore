@@ -6,4 +6,4 @@ dist/
 *.spec.bak
 .venv/
 mac/AppIcon.icns
-cardcopy/assets/build.txt
+cardcopy/assets/build.json

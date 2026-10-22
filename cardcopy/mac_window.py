@@ -19,13 +19,13 @@ from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QApplication, QDialog, QFormLayout, QHBoxLayout, QLabel, QMenuBar, QMessageBox,
                                QVBoxLayout, QWidget)
 
-from . import BUILD, __version__, updates
+from . import BUILD_NUMBER, __version__, updates, version_label
 from .aqua import STYLE, Logo, Panel, PillButton, Subtitle, ToolGroup, Toolbar, heading, nav_caption, well_text
 from .structure import KINDS
 
 HELP_URL = "https://github.com/fahizzzle/cardcopy#readme"
 SIDEBAR_W = 220
-VERSION = f"{__version__} ({BUILD})" if BUILD else __version__
+VERSION = version_label()            # "1.20.0 (build 57)"
 
 
 def arrange(w) -> None:
@@ -255,13 +255,14 @@ class SettingsDialog(QDialog):
     def check_now(self) -> None:
         """Look for a newer CardCopy now, and say so either way (the launch check only speaks up when there is one)."""
         self.status.setText("Checking…")
-        threading.Thread(target=lambda: self._found.done.emit(updates.check(__version__)), daemon=True).start()
+        threading.Thread(target=lambda: self._found.done.emit(updates.check(__version__, build=BUILD_NUMBER)),
+                         daemon=True).start()
 
     def _on_checked(self, found) -> None:
         if found is None:
-            self.status.setText(f"CardCopy {__version__} is the newest version (or GitHub could not be reached).")
+            self.status.setText(f"CardCopy {VERSION} is the newest version (or GitHub could not be reached).")
             return
-        self.status.setText(f"CardCopy {found.version} is available.")
+        self.status.setText(f"CardCopy {found.label} is available.")
         self.window_.signals.update_found.emit(found)
 
 

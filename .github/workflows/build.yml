@@ -37,6 +37,8 @@ jobs:
       - name: Build, start once, package
         env:
           CARDCOPY_BUILD_NUMBER: ${{ github.run_number }}
+          CARDCOPY_CHANNEL: preview
+          CARDCOPY_DOWNLOAD_BASE: https://github.com/${{ github.repository }}/releases/download/mac-preview
         run: PYTHON=python bash scripts/build_mac.sh
       - uses: actions/upload-artifact@v7
         with:
@@ -45,6 +47,7 @@ jobs:
             dist/CardCopy-Installer.pkg
             dist/CardCopy-mac.dmg
             dist/CardCopy-mac.zip
+            dist/latest-mac.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v7
         if: always()
@@ -71,13 +74,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+        # Updated in place rather than deleted and made again: installed copies read latest-mac.json from it,
+        # so it never disappears, and the feed is uploaded last so it never names a file that is not there yet.
         run: |
-          gh release delete mac-preview --cleanup-tag --yes || true
-          gh release create mac-preview dist/CardCopy-Installer.pkg dist/CardCopy-mac.dmg dist/CardCopy-mac.zip \
-            --prerelease --latest=false --target "$GITHUB_SHA" \
-            --title "CardCopy for Mac (preview)" \
-            --notes "Test build of the Mac version from the mac branch ($(echo "$GITHUB_SHA" | cut -c1-7)). Apple silicon, macOS 13 or later.
+          notes="Test build of the Mac version from the mac branch: build ${{ github.run_number }} ($(echo "$GITHUB_SHA" | cut -c1-7)). Apple silicon, macOS 13 or later.
 
           Download CardCopy-Installer.pkg, open it and click Continue, then Install: CardCopy goes into Applications and Launchpad. (Or open CardCopy-mac.dmg and drag CardCopy onto Applications.)
 
-          It is not notarized yet, so macOS first says it cannot verify it: click Done, then open System Settings > Privacy & Security and choose Open Anyway."
+          It is not notarized yet, so macOS first says it cannot verify it: click Done, then open System Settings > Privacy & Security and choose Open Anyway.
+
+          Once installed, CardCopy finds newer preview builds by itself (on launch, or Settings > Check Now) and offers Update Now."
+          if gh release view mac-preview >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/mac-preview" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            gh release upload mac-preview dist/CardCopy-Installer.pkg dist/CardCopy-mac.dmg dist/CardCopy-mac.zip --clobber
+            gh release upload mac-preview dist/latest-mac.json --clobber
+            gh release edit mac-preview --prerelease --latest=false --title "CardCopy for Mac (preview)" --notes "$notes"
+          else
+            gh release create mac-preview dist/CardCopy-Installer.pkg dist/CardCopy-mac.dmg dist/CardCopy-mac.zip \
+              dist/latest-mac.json --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "CardCopy for Mac (preview)" --notes "$notes"
+          fi

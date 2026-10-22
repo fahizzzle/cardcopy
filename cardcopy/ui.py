@@ -14,7 +14,8 @@ from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QComboBox, QDialog, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QMainWindow,
     QMessageBox, QPlainTextEdit, QScrollArea, QSpinBox, QTimeEdit, QVBoxLayout, QWidget)
 
-from . import BUILD, __version__, gdrive, missing as missing_mod, power, receipt, selfupdate, updates
+from . import (BUILD, BUILD_NUMBER, __version__, gdrive, missing as missing_mod, power, receipt, selfupdate, updates,
+               version_label)
 from . import settings as settings_mod
 from .camera_panel import CameraPanel, CardOption, human
 from .cameras import Camera, Card, default_kind, group_cards, split_per_card
@@ -742,7 +743,7 @@ class MainWindow(QMainWindow):
         """Everything CardCopy knows about the connected cards and how it grouped them, as plain text to
         paste into a message. Paths and names only: nothing from inside the files."""
         import platform
-        lines = [f"CardCopy {__version__}{f' ({BUILD})' if BUILD else ''} on {platform.platform()}",
+        lines = [f"CardCopy {version_label()}{f', commit {BUILD}' if BUILD else ''} on {platform.platform()}",
                  f"View: {self.settings['mode']}", "", "Cards:"]
         for card in self.cards:
             v, i = card.volume, card.info
@@ -1665,8 +1666,8 @@ class MainWindow(QMainWindow):
             return
 
         def work() -> None:
-            found = updates.check(__version__)
-            if found is not None and found.version != self.settings.get("skipped_version"):
+            found = updates.check(__version__, build=BUILD_NUMBER)
+            if found is not None and found.label != self.settings.get("skipped_version"):
                 self.signals.update_found.emit(found)
 
         threading.Thread(target=work, daemon=True).start()
@@ -1675,15 +1676,16 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("CardCopy")
         dialog.setModal(True)
-        title = QLabel(f"CardCopy {update.version} is available")
+        title = QLabel(f"CardCopy {update.label} is available")
         title.setStyleSheet(STYLE["dialog_title"])
-        body = QLabel(f"You have {__version__}." + (f"\n\nWhat's new:\n{update.notes}" if update.notes else ""))
+        body = QLabel(f"You have {version_label()}." + (f"\n\nWhat's new:\n{update.notes}" if update.notes else ""))
         body.setWordWrap(True)
         body.setMinimumWidth(420)
         in_place = update.can_self_install() and selfupdate.is_installed()
         download = PillButton("Update now" if in_place else "Download", primary=True)
         if in_place:
-            download.setToolTip("Downloads the update, checks it, then closes CardCopy, installs it and opens it again")
+            download.setToolTip("Downloads the update, checks it, then closes CardCopy, installs it and opens it again"
+                                + (" (macOS asks for your password once)" if sys.platform == "darwin" else ""))
         later = PillButton("Later")
         skip = PillButton("Skip this version")
         buttons = QHBoxLayout()
@@ -1708,7 +1710,7 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl(update.url))
             self._log(f"Opened the download for CardCopy {update.version}. Close CardCopy before running the Setup.")
         elif choice == 2:
-            self.settings["skipped_version"] = update.version
+            self.settings["skipped_version"] = update.label
             self._save_settings()
 
     def _install_update(self, update) -> None:
