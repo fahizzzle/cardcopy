@@ -35,6 +35,7 @@ DEFAULTS = {
     "shutdown_minutes": 60,
     "shutdown_at": "02:00",   # clock time for the "at a set time" option
     "folders": [],
+    "kept_copies": [],        # Mac: other CardCopy.app copies the user chose to keep (asked once, not again)
 }
 
 

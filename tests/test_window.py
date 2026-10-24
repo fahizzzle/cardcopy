@@ -157,6 +157,29 @@ def test_eject_never_takes_the_disk_the_raw_folder_is_on(app, tmp_path, monkeypa
         window.close()
 
 
+@pytest.mark.parametrize("answer", [True, False])
+def test_the_copy_in_applications_offers_to_trash_older_copies_once(app, tmp_path, monkeypatch, answer):
+    from cardcopy import mac_window
+    from cardcopy.mac import copies, selfupdate
+    window = _window(tmp_path, monkeypatch, "mac")
+    try:
+        me, old = str(tmp_path / "Applications" / "CardCopy.app"), str(tmp_path / "Downloads" / "CardCopy.app")
+        monkeypatch.setattr(copies, "APP", me)
+        monkeypatch.setattr(selfupdate, "app_bundle", lambda: me)
+        monkeypatch.setattr(selfupdate, "is_installed", lambda folder=None: True)
+        monkeypatch.setattr(copies, "other_copies", lambda path: [old])
+        trashed = []
+        monkeypatch.setattr(copies, "to_trash", lambda path: trashed.append(path) or True)
+        asked = []
+        monkeypatch.setattr(mac_window, "_ask", lambda *a: asked.append(a[1]) or answer)
+        mac_window.tidy_copies(window)
+        assert asked == ["Other copies of CardCopy"] and trashed == ([old] if answer else [])
+        mac_window.tidy_copies(window)                      # kept once: not asked about again
+        assert len(asked) == (2 if answer else 1)
+    finally:
+        window.close()
+
+
 def test_mac_appearance_switches_palette(app, monkeypatch):
     from cardcopy import aqua
     monkeypatch.setenv("CARDCOPY_APPEARANCE", "dark")

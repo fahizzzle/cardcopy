@@ -105,6 +105,17 @@ def add_vibrancy(widget, width: int) -> bool:
         return False
 
 
+def trash(path: str) -> bool:
+    """Move a file or folder to the Trash the way Finder does (Put Back works). False if it did not."""
+    try:
+        manager = send(_cls("NSFileManager"), "defaultManager")
+        url = send(_cls("NSURL"), "fileURLWithPath:", _nsstring(path), argtypes=[ctypes.c_void_p])
+        return bool(send(manager, "trashItemAtURL:resultingItemURL:error:", url, None, None,
+                         restype=ctypes.c_bool, argtypes=[ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]))
+    except Exception:
+        return False
+
+
 def dock_badge(text: str) -> bool:
     try:
         app = send(_cls("NSApplication"), "sharedApplication")

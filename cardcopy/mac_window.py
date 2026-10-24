@@ -11,10 +11,11 @@ the menu bar and the Settings window, so the two platforms cannot drift apart in
 """
 from __future__ import annotations
 
+import os
 import sys
 import threading
 
-from PySide6.QtCore import QObject, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QApplication, QDialog, QFormLayout, QHBoxLayout, QLabel, QMenuBar, QMessageBox,
                                QVBoxLayout, QWidget)
@@ -209,6 +210,8 @@ def arrange(w) -> None:
     w.settings_dialog = SettingsDialog(w)
     if sys.platform == "darwin":                      # a QMenuBar without a parent is the Mac's global menu bar
         w.menu_bar = menus(w)
+        if not os.environ.get("CARDCOPY_SELFTEST"):   # once the window is up: one CardCopy, in Applications
+            QTimer.singleShot(1200, lambda: tidy_copies(w))
 
 
 # ------------------------------------------------------------------ settings
@@ -351,6 +354,81 @@ def about(w) -> None:
                       f"<b>CardCopy {VERSION}</b><br><br>Copies the photos, videos and recordings off camera "
                       "cards into tidy project folders. It never deletes and never overwrites anything, on the "
                       "cards or at the destination.<br><br>Made by Framed Horizon LLC.")
+
+
+def _ask(w, title: str, text: str, yes: str, no: str) -> bool:
+    box = QMessageBox(QMessageBox.Question, title, text, parent=w)
+    go = box.addButton(yes, QMessageBox.AcceptRole)
+    box.addButton(no, QMessageBox.RejectRole)
+    box.setDefaultButton(go)
+    box.exec()
+    return box.clickedButton() is go
+
+
+def _where(path: str) -> str:
+    """The folder a copy is in, said the way a person would: 'Downloads', 'the disk image'."""
+    from .mac.copies import removable_media
+    if removable_media(path):
+        return "the disk image"
+    folder, home = os.path.dirname(path), os.path.expanduser("~")
+    return folder[len(home) + 1:] if folder.startswith(home + "/") else folder
+
+
+def tidy_copies(w) -> None:
+    """Keep one CardCopy on this Mac: the one in Applications, which is where updates go.
+
+    Run from somewhere else, this copy offers to move into Applications (or to hand over to the copy
+    already there); run from Applications, it offers once to move any older copies to the Trash.
+    """
+    from .mac import copies
+    from .mac.selfupdate import app_bundle, is_installed
+    me = app_bundle()
+    if not is_installed() or not me:
+        return
+    if me != copies.APP and os.path.isdir(copies.APP):
+        there, here = copies.version_of(copies.APP), copies.version_of(me)
+        if _ask(w, "Use the CardCopy in Applications?",
+                f"This CardCopy ({here}) is running from {_where(me)}. There is another one ({there}) in your "
+                "Applications folder.\n\nUpdates go to the one in Applications, so keeping just that one means "
+                "you always open the newest." + ("" if copies.removable_media(me) else
+                                                  "\n\nThis copy will be moved to the Trash."),
+                "Use the One in Applications", "Keep This One"):
+            copies.open_app(copies.APP)
+            if not copies.removable_media(me):
+                copies.to_trash(me)
+            QApplication.quit()
+        return
+    if me != copies.APP:
+        if _ask(w, "Move CardCopy to Applications?",
+                f"CardCopy is running from {_where(me)}. In your Applications folder it stays put, finds its "
+                "updates, and is always the one you open." + ("" if copies.removable_media(me) else
+                                                               "\n\nThis copy will be moved to the Trash."),
+                "Move to Applications", "Not Now"):
+            try:
+                copies.copy_to_applications(me)
+            except OSError as exc:
+                QMessageBox.warning(w, "CardCopy", f"CardCopy could not be copied into Applications:\n{exc}")
+                return
+            copies.open_app(copies.APP)
+            if not copies.removable_media(me):
+                copies.to_trash(me)
+            QApplication.quit()
+        return
+    kept = set(w.settings.get("kept_copies") or [])
+    others = [p for p in copies.other_copies(me) if p not in kept]
+    if not others:
+        return
+    listing = "\n".join(f"•  {_where(p)}/{os.path.basename(p)}   {copies.version_of(p)}" for p in others)
+    if _ask(w, "Other copies of CardCopy",
+            f"There are other copies of CardCopy on this Mac:\n\n{listing}\n\nMove them to the Trash, so the one "
+            "in Applications (the one that updates) is the only one you can open?",
+            "Move to Trash", "Keep Them"):
+        left = [p for p in others if not copies.to_trash(p)]
+        if left:
+            QMessageBox.information(w, "CardCopy", "These could not be moved to the Trash:\n\n" + "\n".join(left))
+    else:
+        w.settings["kept_copies"] = sorted(kept | set(others))     # asked once; not again for these
+        w._save_settings()
 
 
 def copy_report(w) -> None:
