@@ -90,6 +90,36 @@ def copy_to_applications(me: str) -> str:
     return APP
 
 
+SHORTCUT = os.path.join("~", "Desktop", "CardCopy")
+
+
+def desktop_shortcut(app: str = APP) -> str:
+    """Make sure the Desktop has a shortcut to the CardCopy in Applications. Returns what happened:
+    'made', 'there', or 'left' (something of the user's is called CardCopy there, and stays as it is).
+
+    A shortcut (a symbolic link, which Finder shows with an alias arrow), never a copy: it always opens
+    the one in Applications, the one updates replace. An old shortcut of ours that points at a copy
+    elsewhere is pointed at Applications instead. Raises OSError when the Desktop cannot be written
+    (macOS asks once whether CardCopy may).
+    """
+    link = os.path.expanduser(SHORTCUT)
+    if os.path.islink(link):
+        if os.path.realpath(link) == os.path.realpath(app):
+            return "there"
+        if not os.readlink(link).rstrip("/").endswith("CardCopy.app"):
+            return "left"
+        fresh = link + ".new"
+        if os.path.lexists(fresh):
+            return "left"
+        os.symlink(app, fresh)
+        os.replace(fresh, link)                     # swaps the link itself; nothing it pointed at is touched
+        return "made"
+    if os.path.lexists(link):
+        return "left"
+    os.symlink(app, link)
+    return "made"
+
+
 def open_app(path: str) -> None:
     subprocess.Popen(["/usr/bin/open", "-n", path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True)

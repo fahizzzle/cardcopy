@@ -43,7 +43,8 @@ app = BUNDLE(
         "NSRemovableVolumesUsageDescription":
             "CardCopy reads the photos, videos and recordings on your camera cards. It never changes or deletes them.",
         "NSNetworkVolumesUsageDescription": "CardCopy can copy into project folders on a network drive.",
-        "NSDesktopFolderUsageDescription": "CardCopy can copy into project folders on your Desktop.",
+        "NSDesktopFolderUsageDescription":
+            "CardCopy keeps its shortcut on your Desktop, and can copy into project folders there.",
         "NSDocumentsFolderUsageDescription": "CardCopy can copy into project folders in Documents.",
         "NSDownloadsFolderUsageDescription": "CardCopy can copy into project folders in Downloads.",
         "NSFileProviderDomainUsageDescription":

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QFormLayout, QHBoxLayout, 
                                QVBoxLayout, QWidget)
 
 from . import BUILD_NUMBER, __version__, updates, version_label
-from .aqua import STYLE, Logo, Panel, PillButton, Subtitle, ToolGroup, Toolbar, heading, nav_caption, well_text
+from .aqua import STYLE, Logo, Panel, PillButton, Subtitle, Toggle, ToolGroup, Toolbar, heading, nav_caption, well_text
 from .structure import KINDS
 
 HELP_URL = "https://github.com/fahizzzle/cardcopy#readme"
@@ -211,7 +211,7 @@ def arrange(w) -> None:
     if sys.platform == "darwin":                      # a QMenuBar without a parent is the Mac's global menu bar
         w.menu_bar = menus(w)
         if not os.environ.get("CARDCOPY_SELFTEST"):   # once the window is up: one CardCopy, in Applications
-            QTimer.singleShot(1200, lambda: tidy_copies(w))
+            QTimer.singleShot(1200, lambda: (tidy_copies(w), place_shortcut(w)))
 
 
 # ------------------------------------------------------------------ settings
@@ -251,9 +251,26 @@ class SettingsDialog(QDialog):
         lay.addSpacing(4)
         lay.addWidget(QLabel("Updates"))
         lay.addWidget(group)
+        self.shortcut = Toggle("Keep a CardCopy shortcut on the Desktop")
+        self.shortcut.setToolTip("A shortcut to the CardCopy in Applications, put back after every update. "
+                                 "Turning this off leaves any shortcut there as it is.")
+        self.shortcut.setChecked(bool(w.settings.get("desktop_shortcut", True)))
+        place = Panel(radius=20)
+        pl = QVBoxLayout(place)
+        pl.setContentsMargins(16, 12, 16, 12)
+        pl.addWidget(self.shortcut)
+        lay.addWidget(QLabel("Desktop"))
+        lay.addWidget(place)
+        self.shortcut.toggled.connect(self._on_shortcut)
         self._found = _Found()
         self._found.done.connect(self._on_checked)
         now.clicked.connect(self.check_now)
+
+    def _on_shortcut(self, on: bool) -> None:
+        self.window_.settings["desktop_shortcut"] = on
+        self.window_._save_settings()
+        if on:
+            place_shortcut(self.window_)
 
     def check_now(self) -> None:
         """Look for a newer CardCopy now, and say so either way (the launch check only speaks up when there is one)."""
@@ -429,6 +446,20 @@ def tidy_copies(w) -> None:
     else:
         w.settings["kept_copies"] = sorted(kept | set(others))     # asked once; not again for these
         w._save_settings()
+
+
+def place_shortcut(w) -> None:
+    """The Desktop shortcut to the CardCopy in Applications, when Settings says to keep one. Checked at every
+    launch of that copy, so it is there again after each update."""
+    from .mac import copies
+    from .mac.selfupdate import app_bundle, is_installed
+    if not w.settings.get("desktop_shortcut", True) or not is_installed() or app_bundle() != copies.APP:
+        return
+    try:
+        if copies.desktop_shortcut() == "made":
+            w._log("Put a CardCopy shortcut on the Desktop (it opens the one in Applications; Settings can turn it off).")
+    except OSError as exc:
+        w._log(f"No Desktop shortcut: {exc}")
 
 
 def copy_report(w) -> None:

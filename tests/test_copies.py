@@ -53,3 +53,29 @@ def test_the_runner_still_parses(tmp_path):
     script = tmp_path / "run.sh"
     script.write_text(_RUNNER)
     assert subprocess.run(["/bin/sh", "-n", str(script)]).returncode == 0
+
+
+@pytest.fixture
+def desktop(tmp_path, monkeypatch):
+    monkeypatch.setattr(copies.os.path, "expanduser", lambda p: p.replace("~", str(tmp_path / "home"), 1))
+    (tmp_path / "home" / "Desktop").mkdir(parents=True)
+    return tmp_path / "home" / "Desktop"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolic links need admin rights on Windows")
+def test_desktop_shortcut_is_made_once_and_points_at_applications(tmp_path, desktop):
+    app = fake_app(tmp_path / "Applications")
+    assert copies.desktop_shortcut(str(app)) == "made"
+    assert (desktop / "CardCopy").is_symlink() and (desktop / "CardCopy").resolve() == app.resolve()
+    assert copies.desktop_shortcut(str(app)) == "there"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolic links need admin rights on Windows")
+def test_an_old_shortcut_is_repointed_and_the_users_own_file_left_alone(tmp_path, desktop):
+    app, old = fake_app(tmp_path / "Applications"), fake_app(tmp_path / "Downloads", build=30)
+    (desktop / "CardCopy").symlink_to(old)
+    assert copies.desktop_shortcut(str(app)) == "made" and (desktop / "CardCopy").resolve() == app.resolve()
+    assert old.exists()                                           # only the link changed
+    (desktop / "CardCopy").unlink()
+    (desktop / "CardCopy").write_text("the user's own notes")
+    assert copies.desktop_shortcut(str(app)) == "left" and (desktop / "CardCopy").read_text() == "the user's own notes"
