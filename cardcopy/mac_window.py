@@ -251,6 +251,13 @@ class SettingsDialog(QDialog):
         lay.addSpacing(4)
         lay.addWidget(QLabel("Updates"))
         lay.addWidget(group)
+        w.stay_awake_check.setText("Keep the Mac awake while CardCopy is open")
+        awake = Panel(radius=20)
+        al = QVBoxLayout(awake)
+        al.setContentsMargins(16, 12, 16, 12)
+        al.addWidget(w.stay_awake_check)
+        lay.addWidget(QLabel("While open"))
+        lay.addWidget(awake)
         self.shortcut = Toggle("Keep a CardCopy shortcut on the Desktop")
         self.shortcut.setToolTip("A shortcut to the CardCopy in Applications, put back after every update. "
                                  "Turning this off leaves any shortcut there as it is.")

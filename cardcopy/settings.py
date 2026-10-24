@@ -27,6 +27,7 @@ DEFAULTS = {
     "camera_pictures": {},  # camera identity -> image path
     "verify": False,
     "check_updates": True,  # look for a newer version on launch (needs updates.UPDATE_URL)
+    "stay_awake": True,     # the computer does not sleep while CardCopy is open (never during a copy anyway)
     "skipped_version": "",  # "Skip this version" in the update notice
     "receipt": False,       # save an offload receipt in the project folder after a copy (off unless switched on)
     "eject_after": False,   # eject the cards after a clean copy, and before an automatic shutdown

@@ -131,6 +131,7 @@ class MainWindow(QMainWindow):
         self.power_timer.start(5000)
         QTimer.singleShot(1500, self._check_for_update)   # after the window is up
         self.refresh()
+        self._update_awake()                     # "Keep awake" holds from the moment CardCopy opens
 
     # ------------------------------------------------------------------ UI
 
@@ -172,6 +173,9 @@ class MainWindow(QMainWindow):
                                       "copied / already there / error, and its checksum when Verify is on")
         self.eject_check = Toggle("Eject cards")
         self.eject_check.setToolTip("Eject the cards as soon as a copy finishes without errors (and before an automatic shutdown)")
+        self.stay_awake_check = Toggle(f"Keep {COMPUTER} awake")
+        self.stay_awake_check.setToolTip(f"While CardCopy is open the {COMPUTER} does not go to sleep (the screen may "
+                                         "still turn off). It never sleeps during a copy, whatever this says.")
         self.update_check = Toggle("Check for updates")
         self.update_check.setToolTip("On launch, look up whether a newer CardCopy exists. Nothing is downloaded or installed by itself.")
 
@@ -312,6 +316,7 @@ class MainWindow(QMainWindow):
         side.addLayout(after)
         app_box = QVBoxLayout()
         app_box.setContentsMargins(6, 2, 0, 2)
+        app_box.addWidget(self.stay_awake_check)
         app_box.addWidget(self.update_check)
         side.addWidget(nav_caption("CardCopy " + __version__))
         side.addLayout(app_box)
@@ -449,6 +454,7 @@ class MainWindow(QMainWindow):
         self.eject_check.toggled.connect(lambda: self._save_settings())
         self.receipt_check.toggled.connect(lambda: self._save_settings())
         self.update_check.toggled.connect(lambda: self._save_settings())
+        self.stay_awake_check.toggled.connect(lambda: (self._save_settings(), self._update_awake()))
         self.base_btn.clicked.connect(self._browse_base)
         self.spill_btn.clicked.connect(self._browse_spill)
         self.spill_check.toggled.connect(self._on_spill_changed)
@@ -486,6 +492,7 @@ class MainWindow(QMainWindow):
                          (self.audio_check, s["kinds"].get("audio", False)),
                          (self.jpeg_check, s["copy_jpeg"]), (self.xml_check, s["copy_xml"]),
                          (self.empty_check, s["show_empty"]), (self.eject_check, s["eject_after"]), (self.receipt_check, s["receipt"]), (self.update_check, s["check_updates"]), (self.verify_check, s["verify"]),
+                         (self.stay_awake_check, s["stay_awake"]),
                          (self.spill_check, s["spill"])):
             w.blockSignals(True)
             w.setChecked(bool(value))
@@ -527,6 +534,7 @@ class MainWindow(QMainWindow):
         s["eject_after"] = self.eject_check.isChecked()
         s["receipt"] = self.receipt_check.isChecked()
         s["check_updates"] = self.update_check.isChecked()
+        s["stay_awake"] = self.stay_awake_check.isChecked()
         s["shutdown_mode"] = self.shutdown_mode.currentData()
         s["shutdown_minutes"] = self.shutdown_minutes.value()
         s["shutdown_at"] = self.shutdown_at.time().toString("HH:mm")
@@ -1625,14 +1633,20 @@ class MainWindow(QMainWindow):
         self._power_tick()
 
     def _update_awake(self) -> None:
-        """No sleeping while cards are copying, or while a shutdown is waiting for its moment
-        (a sleeping PC neither uploads to Google Drive nor reaches a timer)."""
-        wanted = self.copying or self.shutdown_check.isChecked()
+        """No sleeping while CardCopy is open (the "keep awake" switch, on by default), and in any case not
+        while cards are copying or a shutdown is waiting for its moment: a sleeping computer neither copies,
+        nor uploads to Google Drive, nor reaches a timer. The screen may still turn off."""
+        open_ = self.stay_awake_check.isChecked()
+        wanted = self.copying or self.shutdown_check.isChecked() or open_
         if wanted != self.awake:
             self.awake = wanted
             self.keep_awake(wanted)
-            self._log(f"Keeping the {COMPUTER} awake until this is done (the screen may still turn off)." if wanted
-                      else f"The {COMPUTER} may sleep again.")
+            if not wanted:
+                self._log(f"The {COMPUTER} may sleep again.")
+            elif open_ and not self.copying:
+                self._log(f"Keeping the {COMPUTER} awake while CardCopy is open (the screen may still turn off).")
+            else:
+                self._log(f"Keeping the {COMPUTER} awake until this is done (the screen may still turn off).")
 
     def _power_tick(self) -> None:
         self._update_awake()

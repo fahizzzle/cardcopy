@@ -208,6 +208,26 @@ def test_only_the_chosen_recordings_are_copied(app, tmp_path, monkeypatch, look)
         window.close()
 
 
+@pytest.mark.parametrize("look", ["glass", "mac"])
+def test_the_computer_stays_awake_while_cardcopy_is_open(app, tmp_path, monkeypatch, look):
+    window = _window(tmp_path, monkeypatch, look)
+    try:
+        assert window.awake and window.stay_awake_check.isChecked()          # from the moment it opens
+        calls = []
+        window.keep_awake = lambda on: calls.append(on) or True
+        window.stay_awake_check.setChecked(False)
+        assert calls == [False] and not window.awake and window.settings["stay_awake"] is False
+        window.copying = True
+        window._update_awake()
+        assert calls == [False, True]                    # a copy keeps it awake whatever the switch says
+        window.copying = False
+        window._update_awake()
+        window.stay_awake_check.setChecked(True)
+        assert calls == [False, True, False, True] and window.awake
+    finally:
+        window.close()
+
+
 def test_mac_appearance_switches_palette(app, monkeypatch):
     from cardcopy import aqua
     monkeypatch.setenv("CARDCOPY_APPEARANCE", "dark")
