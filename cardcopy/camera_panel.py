@@ -86,13 +86,17 @@ class KindBadge(QComboBox):
 
 
 class CardOption(Panel):
-    """One SD card: a tick box, what will be copied, what is on it, and its copy status."""
+    """One SD card: a tick box, what will be copied, what is on it, and its copy status.
+
+    An audio device's card also has "Choose recordings…": which of its recordings are copied (pick_dialog).
+    """
     toggled = Signal(str, bool)
     cam_chosen = Signal(str, int)
+    choose_requested = Signal(str)
 
     def __init__(self, card: Card, checked: bool, cam_number: int = 0, cam_count: int = 0,
                  options: CopyOptions | None = None, kind_off: str = "",
-                 cam_names: list[str] | None = None) -> None:
+                 cam_names: list[str] | None = None, choose: bool = False) -> None:
         super().__init__(radius=16)
         self.key = card.key
         self.setCursor(Qt.PointingHandCursor)
@@ -131,6 +135,17 @@ class CardOption(Panel):
             into.addWidget(QLabel("Copy into"))
             into.addWidget(self.combo, 1)
             lay.addLayout(into)
+        self.choose_btn = None
+        if choose:                                # a recorder's card: pick the recordings to copy
+            self.choose_btn = _link("Choose recordings…")
+            self.choose_btn.setToolTip("Pick which recordings are copied; the others stay on the card")
+            self.choose_btn.clicked.connect(lambda: self.choose_requested.emit(self.key))
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 3, 0, 0)
+            row.addWidget(self.choose_btn)
+            row.addStretch(1)
+            lay.addLayout(row)
+        self._pick = ""
         lay.addWidget(self.status)
         self.setMinimumWidth(220)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -176,6 +191,8 @@ class CardOption(Panel):
         if self.kind_off:
             # the Uploading row decides this, not the card: say so rather than promise a copy
             self.count.setText(f"Not copying: {self.kind_off} is off")
+        elif self._pick:
+            self.count.setText(self._pick)        # some of the recordings, chosen by hand
         else:
             self.count.setText(f"{media:,} file{'' if media == 1 else 's'}  ·  {human(size)}" if media
                                else "Nothing to copy")
@@ -206,6 +223,14 @@ class CardOption(Panel):
         self.status.setText(text)
         self.status.setVisible(bool(text))
 
+    def set_pick(self, text: str) -> None:
+        """'12 of 40 recordings · 1.2 GB' while only some are chosen; '' for all of them."""
+        self._pick = text
+        if text and not self.kind_off:
+            self.count.setText(text)
+        if self.choose_btn is not None:
+            self.choose_btn.setText("Change recordings…" if text else "Choose recordings…")
+
     def _apply_enabled(self) -> None:
         self.check.setEnabled(not self._locked and not self.kind_off)
 
@@ -214,6 +239,8 @@ class CardOption(Panel):
         self._apply_enabled()
         if self.combo is not None:
             self.combo.setEnabled(not locked)
+        if self.choose_btn is not None:
+            self.choose_btn.setEnabled(not locked)
 
 
 def _link(text: str) -> QPushButton:
@@ -230,6 +257,7 @@ class CameraPanel(Panel):
     kind_chosen = Signal(str, str)
     card_cam_chosen = Signal(str, int)
     rename_requested = Signal(str)
+    choose_requested = Signal(str)          # a card key: pick which of its recordings are copied
 
     def __init__(self, cam: Camera, cam_number: int, cam_count: int, checked: set[str],
                  kind: str = "photo", kind_labels: dict[str, str] | None = None,
@@ -268,13 +296,15 @@ class CameraPanel(Panel):
         row = QHBoxLayout()
         row.setSpacing(8)
         for card in cam.cards:
+            recorder = kind == "audio"                # its recordings can be chosen one by one
             if card_cams is None:
-                option = CardOption(card, card.key in checked, options=options, kind_off=kind_off)
+                option = CardOption(card, card.key in checked, options=options, kind_off=kind_off, choose=recorder)
             else:
                 option = CardOption(card, card.key in checked, card_cams.get(card.key, cam_number), cam_count,
-                                    options, kind_off=kind_off, cam_names=cam_names)
+                                    options, kind_off=kind_off, cam_names=cam_names, choose=recorder)
                 option.cam_chosen.connect(self.card_cam_chosen)
             option.toggled.connect(self.card_toggled)
+            option.choose_requested.connect(self.choose_requested)
             self.options[card.key] = option
             row.addWidget(option, 1)
 

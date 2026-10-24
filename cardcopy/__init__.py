@@ -1,6 +1,6 @@
 """CardCopy: copy camera SD cards into a project folder structure."""
 
-__version__ = "1.20.2"
+__version__ = "1.21.0"
 
 
 def _build_info() -> dict:

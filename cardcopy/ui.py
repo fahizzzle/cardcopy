@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
         self.view: list[Camera] = []        # what is listed: bodies, or one entry per card
         self.checked: set[str] = set()
         self.card_cam: dict[str, int] = {}   # SD cards view: Cam folder picked for one card
+        self.audio_pick: dict[str, set[str]] = {}   # card -> the recordings chosen to copy (absent: all of them)
         self.seen: set[str] = set()
         self.seen_ids: set[str] = set()      # devices (camera identities) that have had a tile
         self.generation = 0
@@ -601,6 +602,7 @@ class MainWindow(QMainWindow):
         self.cards = cards
         self.checked &= {c.key for c in cards}
         self.card_cam = {k: v for k, v in self.card_cam.items() if k in {c.key for c in cards}}
+        self.audio_pick = {k: v for k, v in self.audio_pick.items() if k in {c.key for c in cards}}
         self._rebuild_cameras(tick_new=True)
         self.scan_label.setText("Reading card contents…" if cards else "")
         if not cards:
@@ -720,7 +722,59 @@ class MainWindow(QMainWindow):
         return CopyOptions(jpeg=self.jpeg_check.isChecked(), xml=self.xml_check.isChecked())
 
     def _size_of(self, card: Card) -> int:
-        return card.info.selected(self._options())[1]
+        return self._counts(card)[1]
+
+    def _files_of(self, card: Card) -> list:
+        """The card's files, less the recordings left out by hand (Choose recordings…)."""
+        pick = self.audio_pick.get(card.key)
+        if pick is None or card.files is None:
+            return card.files or []
+        return [f for f in card.files if f.kind != "audio" or f.rel in pick]
+
+    def _counts(self, card: Card) -> tuple[int, int]:
+        """(files, bytes) this card would copy with the current choices."""
+        if card.key not in self.audio_pick or card.files is None:
+            return card.info.selected(self._options())
+        options = self._options()
+        wanted = [f for f in self._files_of(card) if f.kind and options.wants(f.kind)]
+        return len(wanted), sum(f.size for f in wanted)
+
+    def _pick_text(self, card: Card) -> str:
+        """'12 of 40 recordings · 1.2 GB' when only some of a card's recordings are chosen, else ''."""
+        pick = self.audio_pick.get(card.key)
+        if pick is None or card.files is None:
+            return ""
+        recordings = [f for f in card.files if f.kind == "audio"]
+        chosen = [f for f in recordings if f.rel in pick]
+        return f"{len(chosen):,} of {len(recordings):,} recordings  ·  {human(sum(f.size for f in chosen))}"
+
+    def _choose_recordings(self, key: str) -> None:
+        """Choose recordings…: which of an audio card's recordings are copied. Reads only."""
+        card = next((c for c in self.cards if c.key == key), None)
+        if card is None:
+            return
+        if card.files is None:
+            QMessageBox.information(self, "CardCopy", "Still reading the card. Try again in a moment.")
+            return
+        recordings = [f for f in card.files if f.kind == "audio"]
+        if not recordings:
+            QMessageBox.information(self, "CardCopy", "There are no recordings on this card.")
+            return
+        cam = next((c for c in self.cameras if any(x.key == key for x in c.cards)), None)
+        from .pick_dialog import choose
+        picked = choose(self, f"{cam.name if cam else 'Recorder'}  ·  SD {card.slot}", card.volume.root,
+                        recordings, self.audio_pick.get(key))
+        if picked is False:
+            return
+        if picked is None:
+            self.audio_pick.pop(key, None)
+            self._log(f"{card.volume.letter or card.volume.root}: all {len(recordings):,} recordings will be copied")
+        else:
+            self.audio_pick[key] = picked
+            self._log(f"{card.volume.letter or card.volume.root}: {self._pick_text(card)} chosen to copy; "
+                      "the others stay on the card")
+        self._refresh_rows()
+        self._update_preview()
 
     @staticmethod
     def _is_empty(card: Card) -> bool:
@@ -818,6 +872,10 @@ class MainWindow(QMainWindow):
             panel.cam_chosen.connect(self._on_cam_chosen)
             panel.kind_chosen.connect(self._on_kind_chosen)
             panel.rename_requested.connect(self._rename_camera)
+            panel.choose_requested.connect(self._choose_recordings)
+            for card in cam.cards:
+                if card.key in self.audio_pick:
+                    panel.options[card.key].set_pick(self._pick_text(card))
             panel.set_locked(self.copying)
             self.panels.append(panel)
             self.camera_list.addWidget(panel, index // 2, index % 2, Qt.AlignTop)   # _flow_cameras() settles the columns
@@ -868,6 +926,7 @@ class MainWindow(QMainWindow):
         for card in self.cards:
             option = self._option(card.key)
             if option is not None:
+                option.set_pick(self._pick_text(card))
                 option.update_card(card, self._options(), off.get(card.key, ""))
 
     def _on_card_toggled(self, key: str, on: bool) -> None:
@@ -899,6 +958,8 @@ class MainWindow(QMainWindow):
     def _on_kind_chosen(self, identity: str, kind: str) -> None:
         self.settings["cam_kind"][identity] = kind
         self._after_choice()
+        if self.settings["mode"] != "cards":         # an audio device's cards gain "Choose recordings…"
+            QTimer.singleShot(0, self._rebuild_cameras)
 
     def _after_choice(self) -> None:
         self._save_settings()
@@ -1018,7 +1079,7 @@ class MainWindow(QMainWindow):
         notes: dict[str, list[str]] = {}
         for card, cam in self._selected():
             size = f" {human(self._size_of(card))}" if card.info.scanned else ""
-            files = f" {card.info.selected(self._options())[0]:,} files" if card.info.scanned else ""
+            files = f" {self._counts(card)[0]:,} files" if card.info.scanned else ""
             notes.setdefault(plan.dest(self._kind_of(cam), self._cam_for(card, cam)).lower(), []).append(
                 f"{card.volume.letter or card.volume.label} {cam.name} {card.slot}{files}{size}")
         text = render_plan(plan, self.base_edit.text().strip(), notes)
@@ -1181,7 +1242,7 @@ class MainWindow(QMainWindow):
         self.run_info, self.run_results, self.run_started = {}, {}, dt.datetime.now()
         for card, cam in selected:
             kind = self._kind_of(cam)
-            files = copy_jobs(card.files, plan, self._cam_for(card, cam), kind, self._options())
+            files = copy_jobs(self._files_of(card), plan, self._cam_for(card, cam), kind, self._options())
             if files:
                 jobs.append((card, files))
                 self.run_info[card.key] = (card.volume.root, cam.name, card.slot,
@@ -1388,7 +1449,7 @@ class MainWindow(QMainWindow):
         jobs = []
         for card, cam in selected:
             kind = self._kind_of(cam)
-            files = copy_jobs(card.files, plan, self._cam_for(card, cam), kind, self._options())
+            files = copy_jobs(self._files_of(card), plan, self._cam_for(card, cam), kind, self._options())
             if files:
                 jobs.append((card, cam, plan.dest(kind, self._cam_for(card, cam)), files))
         if not jobs:

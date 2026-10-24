@@ -59,12 +59,21 @@ def make_cards(root: str) -> list[str]:
     folder = os.path.join(zoom, "FOLDER01")
     os.makedirs(folder)
     for n in range(1, 5):
-        bext = b"Interview".ljust(256, b"\0") + b"ZOOM F6".ljust(32, b"\0") + b"\0" * 314
-        body = b"bext" + struct.pack("<I", len(bext)) + bext + b"data" + struct.pack("<I", 4) + b"\0\0\0\0"
-        with open(os.path.join(folder, f"ZOOM{n:04d}.WAV"), "wb") as f:
-            f.write(b"RIFF" + struct.pack("<I", 4 + len(body)) + b"WAVE" + body)
-            f.truncate(1_500_000)
+        write_wav(os.path.join(folder, f"ZOOM{n:04d}.WAV"), "ZOOM F6", 1_500_000 * n)
     return [fx3, a7, zoom]
+
+
+def write_wav(path: str, originator: str = "", size: int = 1_500_000) -> None:
+    """A WAV header the way a field recorder writes one (BWF originator, 48 kHz 24-bit stereo), padded to
+    `size` bytes: what identify reads the recorder's name and the recording's length from."""
+    bext = b"Interview".ljust(256, b"\0") + originator.encode().ljust(32, b"\0") + b"\0" * 314
+    fmt = struct.pack("<HHIIHH", 1, 2, 48000, 48000 * 2 * 3, 6, 24)
+    head = (b"bext" + struct.pack("<I", len(bext)) + bext if originator else b"") + \
+        b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    sound = size - 12 - len(head) - 8
+    with open(path, "wb") as f:
+        f.write(b"RIFF" + struct.pack("<I", size - 8) + b"WAVE" + head + b"data" + struct.pack("<I", sound))
+        f.truncate(size)
 
 
 def main() -> int:

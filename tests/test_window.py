@@ -180,6 +180,34 @@ def test_the_copy_in_applications_offers_to_trash_older_copies_once(app, tmp_pat
         window.close()
 
 
+@pytest.mark.parametrize("look", ["glass", "mac"])
+def test_only_the_chosen_recordings_are_copied(app, tmp_path, monkeypatch, look):
+    window = _window(tmp_path, monkeypatch, look)
+    try:
+        window.project_edit.setText("bob")
+        zoom = next(p for p in window.panels if p.kind_combo.currentText().endswith("Audio"))
+        (key, option), = zoom.options.items()
+        assert option.choose_btn is not None                                     # only an audio card has it
+        assert all(o.choose_btn is None for p in window.panels if p is not zoom for o in p.options.values())
+        card = next(c for c in window.cards if c.key == key)
+        first = sorted(f.rel for f in card.files if f.kind == "audio")[0]
+        from cardcopy import pick_dialog
+        monkeypatch.setattr(pick_dialog, "choose", lambda *a: {first})
+        window._choose_recordings(key)
+        assert option.count.text().startswith("1 of 4 recordings")
+        assert "Zoom card Zoom F6 Card 1 1 files" in window.preview.toPlainText()
+        window.copy_btn.click()
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and window.copying:
+            QApplication.processEvents()
+            time.sleep(0.02)
+        copied = os.listdir(os.path.join(window.base_edit.text(), "Raw Video", "bob", "Audio"))
+        assert copied == [os.path.basename(first)]                               # the rest stayed on the card
+        assert len(os.listdir(os.path.dirname(os.path.join(card.volume.root, first)))) == 4
+    finally:
+        window.close()
+
+
 def test_mac_appearance_switches_palette(app, monkeypatch):
     from cardcopy import aqua
     monkeypatch.setenv("CARDCOPY_APPEARANCE", "dark")

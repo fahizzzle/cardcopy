@@ -708,4 +708,14 @@ def app_stylesheet() -> str:
     QDialog QPushButton:default {{ background: {accent}; border-color: {accent}; color: white; }}
     QDialog QLineEdit {{ background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.18); border-radius: 10px;
                          padding: 6px 10px; color: {text}; }}
+    QTreeWidget {{ background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px;
+                   color: {text}; outline: none; selection-background-color: rgba(255,91,58,0.35);
+                   selection-color: white; }}
+    QTreeWidget::item {{ padding: 3px 2px; }}
+    QTreeWidget::indicator {{ width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.45);
+                              background: rgba(255,255,255,0.06); }}
+    QTreeWidget::indicator:checked {{ background: {accent}; border-color: {accent};
+                                      image: url("{ASSETS}/check-white.png"); }}
+    QHeaderView::section {{ background: transparent; color: {TEXT_SOFT}; border: none;
+                            border-bottom: 1px solid rgba(255,255,255,0.12); padding: 5px 8px; }}
     """
