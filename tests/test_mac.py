@@ -207,3 +207,12 @@ def test_same_volume(tmp_path):
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     assert mac_gdrive.same_volume(str(tmp_path / "a"), str(tmp_path / "b"))
+
+
+def test_a_wireless_mic_whose_storage_calls_itself_fixed_is_still_listed(tmp_path):
+    mic = mac_devices.volume_from_info(str(tmp_path), {**SD_CARD, "VolumeName": "DJI_MIC2", "RemovableMedia": False,
+                                                       "Removable": False, "MediaName": "DJI MIC 2"})
+    assert mic.drive_type == DRIVE_FIXED and mac_devices.is_card(mic)
+    other = mac_devices.volume_from_info(str(tmp_path), {**SD_CARD, "VolumeName": "Backup", "RemovableMedia": False,
+                                                         "Removable": False, "MediaName": "Samsung T7"})
+    assert not mac_devices.is_card(other)

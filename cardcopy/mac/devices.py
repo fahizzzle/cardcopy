@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 
-from ..devices import (CARD_MARKERS, DRIVE_FIXED, DRIVE_REMOVABLE, IGNORED_LABELS, Volume)
+from ..devices import (CARD_MARKERS, DRIVE_FIXED, DRIVE_REMOVABLE, IGNORED_LABELS, Volume, named_like_a_recorder)
 
 VOLUMES = "/Volumes"
 
@@ -123,7 +123,7 @@ def is_card(volume: Volume) -> bool:
         return False
     if volume.label.upper() in IGNORED_LABELS:
         return False
-    if volume.drive_type == DRIVE_REMOVABLE:
+    if volume.drive_type == DRIVE_REMOVABLE or named_like_a_recorder(volume):
         return True
     return any(os.path.isdir(os.path.join(volume.root, m)) for m in CARD_MARKERS)
 

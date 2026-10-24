@@ -99,7 +99,16 @@ def is_card(volume: Volume) -> bool:
         return False
     if volume.drive_type == DRIVE_REMOVABLE:
         return True
+    if named_like_a_recorder(volume):
+        return True
     return any(os.path.isdir(os.path.join(volume.root, m)) for m in CARD_MARKERS)
+
+
+def named_like_a_recorder(volume: Volume) -> bool:
+    """A recorder or wireless mic plugged in by USB ("DJI_MIC2", "ZOOM F6"): its built-in storage may call
+    itself a fixed disk, and holds no camera folders, but it is a card to copy all the same."""
+    from .cameras import is_audio_device          # here, not at the top: cameras imports this module
+    return is_audio_device(volume.label) or is_audio_device(volume.model)
 
 
 def folder_volume(path: str) -> Volume:

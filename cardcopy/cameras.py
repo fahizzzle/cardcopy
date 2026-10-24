@@ -45,18 +45,33 @@ _VIDEO_MODEL = re.compile(
     r"|CINEMA|CAMCORDER", re.I)
 
 
-# Field recorders. Their name comes from the WAV's BWF header rather than EXIF, but is matched the same way.
-# Checked before the video patterns, so a DJI Mic is audio while the rest of DJI stays video.
+# Field recorders and wireless microphones that record on board. Their name comes from the WAV's BWF
+# header, the card's volume name or the USB device, rather than EXIF, but is matched the same way.
+# Checked before the video patterns, so every DJI Mic is audio while the rest of DJI stays video.
 _AUDIO_MODEL = re.compile(
     r"(ZOOM ?(F|H|M)\d|TASCAM|\bDR-\d{2}|PORTACAPTURE|SOUND ?DEVICES|MIXPRE|SCORPIO|\b7\d{2}T\b"
     r"|ZAXCOM|NOMAD|\bDEVA\b|MARANTZ|\bPMD\d|SONOSAX|CANTAR|AATON"
-    r"|R[ØO]DE ?(WIRELESS|NTG|CASTER)|DJI ?MIC|TENTACLE|RECORDER)", re.I)
+    r"|DJI[ _-]?MIC|OSMO[ _-]?AUDIO"                                         # DJI Mic, Mic 2, Mic Mini, Mic 3 ...
+    r"|R[ØO]DE[ _-]?(WIRELESS|NTG|CASTER)|WIRELESS[ _-]?(GO|PRO|ME)\b"      # RØDE Wireless GO / PRO / ME
+    r"|HOLLYLAND|\bLARK\b|SARAMONIC|\bBLINK[ _-]?\d|COMICA|\bVIMO\b|DEITY|SENNHEISER|SHURE|SYNCO|\bECM-W"
+    r"|TENTACLE|RECORDER)", re.I)
+
+
+def is_audio_device(name: str) -> bool:
+    """A recorder's or a wireless mic's name ("DJI_MIC2", "ZOOM F6", "Wireless GO II")."""
+    return bool(name and _AUDIO_MODEL.search(name))
 
 
 def default_kind(model: str, photo_bytes: int = 0, video_bytes: int = 0, audio_bytes: int = 0) -> str:
     """'video', 'photo' or 'audio' for a device. The model decides when it is known (an FX3 is a video
-    camera even with a few stills on it); a card naming no device goes by what it mostly holds."""
+    camera even with a few stills on it); a card naming no device goes by what it mostly holds.
+
+    A card holding nothing but sound is an audio device whatever its name says: a DJI Mic writes "DJI"
+    into its files, which would otherwise read as DJI's cameras and drones.
+    """
     model = model.strip()
+    if audio_bytes and not photo_bytes and not video_bytes:
+        return "audio"
     if model:
         if _AUDIO_MODEL.search(model):
             return "audio"
@@ -86,6 +101,17 @@ def friendly_name(model: str, make: str = "") -> str:
     if brand and brand.split()[0].upper() not in model.upper():
         model = f"{brand} {model}"
     return model
+
+
+def _tidy(name: str) -> str:
+    """A device name as it reads best: 'DJI_MIC2' -> 'DJI Mic 2', 'DJI MIC MINI' -> 'DJI Mic Mini'."""
+    name = re.sub(r"_+", " ", name).strip()
+    dji = re.fullmatch(r"DJI ?MIC ?(.*)", name, re.I)
+    if dji:
+        rest = " ".join(w if w.isdigit() or (w.isupper() and len(w) <= 3) else w.title()
+                        for w in re.sub(r"(\d+)", r" \1 ", dji.group(1)).split())
+        return f"DJI Mic {rest}".strip()
+    return name
 
 
 def split_per_card(cameras: list["Camera"]) -> list["Camera"]:
@@ -183,13 +209,16 @@ def group_cards(cards: list[Card], names: dict[str, str] | None = None) -> list[
             card.slot = f"Card {i}"
         recorder = all(holds(c) in ("audio", "") for c in members) and any(holds(c) == "audio" for c in members)
         named = next((c.info.model for c in members if c.info.model), "")       # read from the card itself
-        if recorder and default_kind(named) != "audio":
-            named = ""                      # a camera's leftover files on a recorder's card: not its name
+        if recorder and not is_audio_device(named):
+            # "DJI" in a DJI Mic's files, or a camera's leftover files on a recorder's card, is not its name:
+            # the device itself may say better (the USB device "DJI MIC 2", the volume "DJI_MIC2")
+            named = next((n for n in [c.volume.model for c in members] + [c.volume.label for c in members]
+                          if is_audio_device(n)), "")
         model = named or ("Audio recorder" if recorder else "") \
             or next((c.volume.model for c in members if c.volume.model), "") \
             or members[0].volume.label or "Unknown camera"
         make = next((c.info.make for c in members if c.info.make), "") if named else ""
-        cameras.append(Camera(identity, model, friendly_name(named, make) if named else model,
+        cameras.append(Camera(identity, model, friendly_name(_tidy(named), make) if named else model,
                               names.get(identity, ""), members))
 
     # Four identical bodies: tell them apart until the user names them.

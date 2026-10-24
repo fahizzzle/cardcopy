@@ -72,3 +72,31 @@ def test_recordings_never_join_a_camera_even_on_another_device():
     cams = group_cards([card("/Volumes/SD", 0, dev="usb:cam", make="Sony", model="ILME-FX3", body="1", video=10**9),
                         card("/Volumes/MICRO", 0, dev="usb:reader", make="Sony", model="ILME-FX3", body="1", audio=10**8)])
     assert len(cams) == 2
+
+
+def test_every_dji_mic_and_other_wireless_mics_are_audio():
+    from cardcopy.cameras import default_kind
+    for name in ("DJI Mic", "DJI MIC 2", "DJI_MIC2", "DJIMIC", "DJI Mic Mini", "DJI Mic 3", "DJI Mic2 TX",
+                 "Wireless GO II", "RODE Wireless PRO", "Hollyland Lark M2", "Saramonic Blink500 B2", "ZOOM F3"):
+        assert default_kind(name) == "audio", name
+    for name in ("DJI", "Osmo Action 4", "FC3411", "ILME-FX3"):           # DJI's cameras and drones stay video
+        assert default_kind(name) == "video", name
+
+
+def test_a_card_of_nothing_but_sound_is_audio_whatever_it_says():
+    from cardcopy.cameras import default_kind
+    assert default_kind("DJI", audio_bytes=10**8) == "audio"              # a DJI Mic writes "DJI" in its files
+    assert default_kind("DJI", video_bytes=10**9, audio_bytes=10**6) == "video"   # an Osmo with some sound
+
+
+def test_a_dji_mic_card_in_the_cameras_reader_gets_its_own_tile_and_name():
+    mic = card("/Volumes/DJI_MIC2", 1, make="DJI", model="DJI", audio=10**8)
+    mic.volume.label = "DJI_MIC2"
+    cams = group_cards([card("/Volumes/SD", 0, make="Sony", model="ILME-FX3", body="5051234", video=10**9), mic])
+    assert names(cams) == [("DJI Mic 2", ["/Volumes/DJI_MIC2"]), ("FX3", ["/Volumes/SD"])]
+
+
+def test_tidy_device_names():
+    from cardcopy.cameras import _tidy
+    assert [_tidy(n) for n in ("DJI_MIC2", "DJI MIC MINI", "dji mic 2 TX", "ZOOM_F6")] == \
+        ["DJI Mic 2", "DJI Mic Mini", "DJI Mic 2 TX", "ZOOM F6"]
