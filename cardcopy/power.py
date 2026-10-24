@@ -1,4 +1,4 @@
-"""Shutting the PC down when the work is done. No Qt in here.
+"""Shutting the PC down when the work is done (Windows; a Mac's answers come from mac/power.py). No Qt in here.
 
 Google Drive for desktop has no public "am I synced?" signal, so "Drive has finished" is an estimate:
 the GoogleDriveFS processes move megabytes per second while they upload (they read their cache and
@@ -17,11 +17,15 @@ import datetime as dt
 import os
 import socket
 import subprocess
+import sys
 import time
-from ctypes import wintypes
 from typing import Callable
 
+if os.name == "nt":
+    from ctypes import wintypes
+
 DRIVE_PROCESS = "googledrivefs.exe"
+UNMEASURABLE = -1           # drive_traffic: Drive is running, but how busy it is cannot be read
 QUIET_BYTES_PER_SEC = 400 * 1024
 QUIET_SECONDS = 300
 _CREATE_NO_WINDOW = 0x08000000
@@ -44,11 +48,12 @@ def internet_up(timeout: float = 3.0) -> bool:
     return False
 
 
-class _ProcessEntry(ctypes.Structure):
-    _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("pid", wintypes.DWORD),
-                ("heap", ctypes.c_size_t), ("module", wintypes.DWORD), ("threads", wintypes.DWORD),
-                ("parent", wintypes.DWORD), ("priority", ctypes.c_long), ("flags", wintypes.DWORD),
-                ("exe", ctypes.c_wchar * 260)]
+if os.name == "nt":
+    class _ProcessEntry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("pid", wintypes.DWORD),
+                    ("heap", ctypes.c_size_t), ("module", wintypes.DWORD), ("threads", wintypes.DWORD),
+                    ("parent", wintypes.DWORD), ("priority", ctypes.c_long), ("flags", wintypes.DWORD),
+                    ("exe", ctypes.c_wchar * 260)]
 
 
 class _IoCounters(ctypes.Structure):
@@ -85,10 +90,11 @@ def drive_traffic() -> int | None:
 class DriveWatcher:
     """Feed it poll() calls every few seconds; quiet() turns True once Drive has been idle long enough."""
 
-    def __init__(self, sample: Callable[[], int | None] = drive_traffic, clock: Callable[[], float] = time.monotonic,
+    def __init__(self, sample: Callable[[], int | None] | None = None, clock: Callable[[], float] = time.monotonic,
                  quiet_rate: float = QUIET_BYTES_PER_SEC, quiet_seconds: float = QUIET_SECONDS,
                  check_online: Callable[[], bool] = internet_up, online_every: float = ONLINE_EVERY) -> None:
-        self.sample, self.clock = sample, clock
+        self.sample = sample if sample is not None else drive_traffic    # looked up now: a Mac replaces it below
+        self.clock = clock
         self.quiet_rate, self.quiet_seconds = quiet_rate, quiet_seconds
         self.check_online, self.online_every = check_online, online_every
         self.last: tuple[float, int] | None = None
@@ -96,11 +102,16 @@ class DriveWatcher:
         self.rate = 0.0
         self.running = True
         self.online = True
+        self.measurable = True
         self._checked_at: float | None = None
 
     def poll(self) -> None:
         now, value = self.clock(), self.sample()
         self.running = value is not None
+        self.measurable = value != UNMEASURABLE
+        if value == UNMEASURABLE:              # running, but how busy is unknown: never call that finished
+            self.last, self.rate, self.quiet_since = None, 0.0, None
+            return
         if value is None:                      # Drive is not running: there is nothing to wait for
             self.last, self.rate = None, 0.0
             if self.quiet_since is None:
@@ -151,9 +162,18 @@ def next_occurrence(hour: int, minute: int, now: dt.datetime | None = None) -> d
     return target if target > now else target + dt.timedelta(days=1)
 
 
+def prepare_shutdown() -> tuple[bool, str]:
+    """(ok, why not): can this computer be shut down by CardCopy later? Windows always lets it."""
+    return True, ""
+
+
 def shut_down_pc() -> None:
     """Ordinary shutdown: /t 0 so Windows does NOT force-close programs with unsaved work
     (any delay above zero implies /f)."""
     if os.environ.get("CARDCOPY_NO_SHUTDOWN"):      # tests and dry runs: never the real thing
         return
     subprocess.Popen(["shutdown", "/s", "/t", "0"], creationflags=_CREATE_NO_WINDOW)
+
+
+if sys.platform == "darwin":            # caffeinate, System Events and nettop instead of the Win32 calls
+    from .mac.power import drive_traffic, keep_awake, prepare_shutdown, shut_down_pc  # noqa: E402,F401,F811

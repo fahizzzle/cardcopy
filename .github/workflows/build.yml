@@ -1,0 +1,169 @@
+name: Build
+
+# Every push: tests on Windows and macOS, then both apps are built and opened once to prove they start.
+# A push to mac also refreshes the mac-preview pre-release. A version tag (v1.20.0, annotated: its message
+# becomes the release notes, the first paragraph the in-app "What's new") publishes the official release
+# for both platforms, update feeds included -- which every installed copy then offers as an update.
+on:
+  push:
+    branches: [main, mac]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements.txt pytest==9.1.1
+      - run: python -m pytest -q
+
+  mac-app:
+    name: CardCopy.app
+    needs: test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Build, start once, package
+        env:
+          # one run-number sequence for previews and releases, so a release outranks the previews before it
+          CARDCOPY_BUILD_NUMBER: ${{ github.run_number }}
+          CARDCOPY_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'preview' }}
+          CARDCOPY_DOWNLOAD_BASE: https://github.com/${{ github.repository }}/releases/download/${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'mac-preview' }}
+        run: PYTHON=python bash scripts/build_mac.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: CardCopy-mac
+          path: |
+            dist/CardCopy-Installer.pkg
+            dist/CardCopy-mac.dmg
+            dist/CardCopy-mac.zip
+            dist/latest-mac.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: screenshots
+          path: dist/screenshots/
+          if-no-files-found: warn
+
+  windows-app:
+    name: CardCopy for Windows
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --no-progress -y }
+      - name: Build (embedded Python, zip and Setup.exe)
+        shell: pwsh
+        run: ./scripts/build_windows.ps1 -Python python
+      - name: Does it start?
+        shell: pwsh
+        run: |
+          $shots = Join-Path $PWD "dist\screenshots-windows"
+          New-Item -ItemType Directory -Force $shots, "$env:RUNNER_TEMP\home" | Out-Null
+          $env:CARDCOPY_HOME = "$env:RUNNER_TEMP\home"; $env:CARDCOPY_SELFTEST = $shots
+          $env:CARDCOPY_NO_UPDATE_CHECK = "1"; $env:CARDCOPY_NO_SHUTDOWN = "1"; $env:CARDCOPY_NO_DEVICES = "1"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $app = Start-Process "dist\CardCopy-Setup\CardCopy\python\pythonw.exe" -ArgumentList "-m cardcopy" `
+            -WorkingDirectory "dist\CardCopy-Setup\CardCopy" -PassThru
+          if (-not $app.WaitForExit(90000)) { $app.Kill(); throw "CardCopy did not quit after its self-test" }
+          if (-not (Test-Path "$shots\app-window.png")) { throw "CardCopy did not start (no self-test picture)" }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: CardCopy-windows
+          path: |
+            dist/CardCopy-Setup.exe
+            dist/CardCopy-Setup.zip
+          if-no-files-found: error
+
+  mac-preview:
+    # A download link for trying the Mac app: the "mac-preview" pre-release, replaced on every push to mac.
+    # A pre-release is never "latest", so the update check of installed copies (Windows and Mac) ignores it.
+    name: Publish mac-preview
+    needs: mac-app
+    if: github.ref == 'refs/heads/mac' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: CardCopy-mac
+          path: dist
+      - name: Replace the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Updated in place rather than deleted and made again: installed copies read latest-mac.json from it,
+        # so it never disappears, and the feed is uploaded last so it never names a file that is not there yet.
+        run: |
+          notes="Test build of the Mac version from the mac branch: build ${{ github.run_number }} ($(echo "$GITHUB_SHA" | cut -c1-7)). Apple silicon, macOS 13 or later.
+
+          Download CardCopy-Installer.pkg, open it and click Continue, then Install: CardCopy goes into Applications and Launchpad. (Or open CardCopy-mac.dmg and drag CardCopy onto Applications.)
+
+          It is not notarized yet, so macOS first says it cannot verify it: click Done, then open System Settings > Privacy & Security and choose Open Anyway.
+
+          Once installed, CardCopy finds newer preview builds by itself (on launch, or Settings > Check Now) and offers Update Now."
+          if gh release view mac-preview >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/mac-preview" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            gh release upload mac-preview dist/CardCopy-Installer.pkg dist/CardCopy-mac.dmg dist/CardCopy-mac.zip --clobber
+            gh release upload mac-preview dist/latest-mac.json --clobber
+            gh release edit mac-preview --prerelease --latest=false --title "CardCopy for Mac (preview)" --notes "$notes"
+          else
+            gh release create mac-preview dist/CardCopy-Installer.pkg dist/CardCopy-mac.dmg dist/CardCopy-mac.zip \
+              dist/latest-mac.json --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "CardCopy for Mac (preview)" --notes "$notes"
+          fi
+
+  release:
+    name: Publish the release
+    needs: [mac-app, windows-app]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: The tag's message (release notes)
+        run: git fetch --force origin "$GITHUB_REF:$GITHUB_REF"
+      - uses: actions/download-artifact@v8
+        with:
+          name: CardCopy-mac
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: CardCopy-windows
+          path: dist
+      - name: Update feeds, then the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          git for-each-ref "refs/tags/$TAG" --format='%(contents)' | sed '/^-----BEGIN PGP/,$d' > dist/notes.md
+          python3 scripts/release_feeds.py "$TAG" dist
+          gh release create "$TAG" --verify-tag --latest --title "CardCopy ${TAG#v}" --notes-file dist/notes.md \
+            dist/CardCopy-Setup.exe dist/CardCopy-Setup.zip dist/latest.json \
+            dist/CardCopy-Installer.pkg dist/CardCopy-mac.dmg dist/CardCopy-mac.zip dist/latest-mac.json

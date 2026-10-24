@@ -136,3 +136,7 @@ def apply(zip_path: str, into: str | None = None, run: bool = True) -> str:
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             cwd=work)
     return runner
+
+
+if sys.platform == "darwin":            # a Mac installs the downloaded CardCopy-Installer.pkg instead
+    from .mac.selfupdate import apply, is_installed  # noqa: E402,F401,F811

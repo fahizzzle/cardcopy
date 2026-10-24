@@ -1,8 +1,10 @@
-"""Remembered choices: %APPDATA%\\CardCopy\\settings.json (or CARDCOPY_HOME)."""
+"""Remembered choices: %APPDATA%\\CardCopy\\settings.json on Windows,
+~/Library/Application Support/CardCopy/settings.json on a Mac (or CARDCOPY_HOME)."""
 from __future__ import annotations
 
 import json
 import os
+import sys
 
 from .structure import DEFAULT_BASE, DEFAULT_KIND_FOLDERS
 
@@ -12,6 +14,9 @@ DEFAULTS = {
     "spill_base": "",       # the backup folder; the same Raw Photo/Video/Audio layout is made inside it
     "kind_folders": dict(DEFAULT_KIND_FOLDERS),
     "kinds": {"photo": True, "video": True, "audio": False},   # audio ticks itself when a recorder turns up
+    # Where recordings go: "with_video" = Raw Video\<project>\Audio, beside the footage they belong to;
+    # "raw_audio" = Raw Audio\<project>\Cam N. (A new name: an older "audio_in_video": false is not carried over.)
+    "audio_place": "with_video",
     "copy_jpeg": False,     # photos: RAW only unless this is on
     "copy_xml": False,      # video: clips only unless this is on
     "cam_counts": {"photo": 0, "video": 0, "audio": 0},   # Cam folders per Raw folder; 0 = one per device
@@ -22,6 +27,7 @@ DEFAULTS = {
     "camera_pictures": {},  # camera identity -> image path
     "verify": False,
     "check_updates": True,  # look for a newer version on launch (needs updates.UPDATE_URL)
+    "stay_awake": True,     # the computer does not sleep while CardCopy is open (never during a copy anyway)
     "skipped_version": "",  # "Skip this version" in the update notice
     "receipt": False,       # save an offload receipt in the project folder after a copy (off unless switched on)
     "eject_after": False,   # eject the cards after a clean copy, and before an automatic shutdown
@@ -30,12 +36,16 @@ DEFAULTS = {
     "shutdown_minutes": 60,
     "shutdown_at": "02:00",   # clock time for the "at a set time" option
     "folders": [],
+    "kept_copies": [],        # Mac: other CardCopy.app copies the user chose to keep (asked once, not again)
+    "desktop_shortcut": True,  # Mac: keep a shortcut to /Applications/CardCopy.app on the Desktop
 }
 
 
 def settings_path() -> str:
-    home = os.environ.get("CARDCOPY_HOME") or os.path.join(
-        os.environ.get("APPDATA") or os.path.expanduser("~"), "CardCopy")
+    home = os.environ.get("CARDCOPY_HOME")
+    if not home and sys.platform == "darwin":
+        home = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "CardCopy")
+    home = home or os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "CardCopy")
     return os.path.join(home, "settings.json")
 
 

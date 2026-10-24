@@ -282,6 +282,30 @@ def read_wav_info(path: str) -> CardInfo | None:
     return CardInfo(make=make if make.isupper() or make.istitle() else "", model=model)
 
 
+def wav_seconds(path: str) -> float | None:
+    """How long a WAV/BWF recording is, from its header (bytes per second and the size of its sound).
+    None when the file is not a WAV or its header cannot be read -- only the first 128 KB is looked at."""
+    try:
+        with open(path, "rb") as f:
+            buf = f.read(128 * 1024)
+            size = os.fstat(f.fileno()).st_size
+    except OSError:
+        return None
+    if buf[:4] != b"RIFF" or buf[8:12] != b"WAVE":
+        return None
+    pos, byte_rate = 12, 0
+    while pos + 8 <= len(buf):
+        name, length = buf[pos:pos + 4], int.from_bytes(buf[pos + 4:pos + 8], "little")
+        if name == b"fmt " and length >= 12:
+            byte_rate = int.from_bytes(buf[pos + 16:pos + 20], "little")     # after format, channels, rate
+        if name == b"data":
+            left = max(size - pos - 8, 0)                  # a recording cut short, or RF64 (size 0xFFFFFFFF)
+            sound = left if length in (0, 0xFFFFFFFF) else min(length, left)
+            return sound / byte_rate if byte_rate else None
+        pos += 8 + length + (length & 1)
+    return None
+
+
 def _first_audio(root: str) -> str | None:
     """The first recording on the card, preferring the folders recorders actually use."""
     likely = [os.path.join(root, name) for name in ("FOLDER01", "MUSIC", "RECORD", "AUDIO", "SD_CARD")]

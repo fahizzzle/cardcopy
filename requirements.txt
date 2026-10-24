@@ -1,0 +1,2 @@
+# What CardCopy runs on (the Windows build ships the same versions next to an embedded Python 3.11.9).
+PySide6-Essentials==6.11.2
