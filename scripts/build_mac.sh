@@ -50,7 +50,11 @@ echo "== does it start?"
 shots="$PWD/dist/screenshots"
 rm -rf "$shots" && mkdir -p "$shots"
 home="$(mktemp -d)"
-CARDCOPY_HOME="$home" CARDCOPY_NO_UPDATE_CHECK=1 CARDCOPY_NO_SHUTDOWN=1 CARDCOPY_SELFTEST="$shots" \
+# It also fetches the real update feed over HTTPS: a frozen Python that cannot verify GitHub's certificate
+# fails every update check without a word (1.20.0 did), so a build that cannot is not a build.
+env -u SSL_CERT_FILE -u SSL_CERT_DIR \
+  CARDCOPY_HOME="$home" CARDCOPY_NO_UPDATE_CHECK=1 CARDCOPY_NO_SHUTDOWN=1 CARDCOPY_SELFTEST="$shots" \
+  CARDCOPY_SELFTEST_FEED="https://github.com/fahizzzle/cardcopy/releases/latest/download/latest-mac.json" \
   dist/CardCopy.app/Contents/MacOS/CardCopy &
 app=$!
 ( sleep 90; kill "$app" 2>/dev/null ) &
@@ -59,6 +63,11 @@ wait "$app" || true
 kill "$watchdog" 2>/dev/null || true
 if [ ! -f "$shots/app-window.png" ]; then
   echo "CardCopy.app did not start (no self-test picture)" >&2
+  exit 1
+fi
+echo "update feed: $(cat "$shots/update-check.txt" 2>/dev/null || echo 'no answer')"
+if ! grep -q "^ok " "$shots/update-check.txt" 2>/dev/null; then
+  echo "CardCopy.app cannot reach GitHub over HTTPS, so it would never see an update" >&2
   exit 1
 fi
 

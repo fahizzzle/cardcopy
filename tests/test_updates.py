@@ -45,7 +45,7 @@ def test_check_offers_the_newest_of_the_feeds(monkeypatch):
     pages = {"https://a/latest-mac.json": feed("1.20.0", 0), "https://b/latest-mac.json": feed("1.20.0", 61)}
     monkeypatch.setattr(updates, "feed_urls", lambda channel="": list(pages) + ["https://missing/latest-mac.json"])
 
-    def urlopen(request, timeout=0):
+    def urlopen(request, timeout=0, context=None):
         if request.full_url not in pages:
             raise OSError("404")
         return io.BytesIO(pages[request.full_url].encode())
@@ -84,3 +84,15 @@ def test_mac_runner_is_valid_shell(tmp_path, monkeypatch):
     script.write_text(mac_selfupdate._RUNNER)
     assert subprocess.run(["/bin/sh", "-n", str(script)]).returncode == 0
     assert os.access(str(script), os.R_OK)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="only a Mac brings its own certificates")
+def test_a_mac_trusts_what_macos_trusts():
+    context = updates.tls_context()
+    assert context is not None and context.verify_mode.name == "CERT_REQUIRED" and context.check_hostname
+    assert context.cert_store_stats()["x509_ca"] > 50
+
+
+def test_windows_keeps_pythons_own_https_checks(monkeypatch):
+    monkeypatch.setattr(updates.sys, "platform", "win32")
+    assert updates.tls_context() is None

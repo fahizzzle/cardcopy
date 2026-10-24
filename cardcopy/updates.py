@@ -28,11 +28,50 @@ import hashlib
 import json
 import os
 import re
+import ssl
+import subprocess
 import sys
 import threading
 import urllib.request
 from dataclasses import dataclass
 from typing import Callable
+
+_MAC_ROOTS = "/etc/ssl/cert.pem"          # the certificate authorities macOS ships for its own command-line tools
+_context: ssl.SSLContext | None = None
+
+
+def tls_context() -> ssl.SSLContext | None:
+    """How HTTPS is checked. None (Python's default) everywhere but a Mac.
+
+    The Mac app is a frozen Python whose OpenSSL looks for trusted certificates in folders of the machine
+    that built it, which do not exist on anyone else's Mac: every HTTPS request then fails, and the update
+    check reads that as "offline". So a Mac trusts what macOS itself trusts: /etc/ssl/cert.pem, or failing
+    that the system root keychain. Nothing is relaxed -- certificates and host names are still verified.
+    """
+    global _context
+    if sys.platform != "darwin":
+        return None
+    if _context is None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)            # verifies certificates and host names
+        try:
+            if os.path.isfile(_MAC_ROOTS):
+                context.load_verify_locations(cafile=_MAC_ROOTS)
+            else:
+                roots = subprocess.run(["security", "find-certificate", "-a", "-p",
+                                        "/System/Library/Keychains/SystemRootCertificates.keychain"],
+                                       capture_output=True, text=True, timeout=30).stdout
+                context.load_verify_locations(cadata=roots)
+        except (OSError, ValueError, ssl.SSLError, subprocess.SubprocessError):
+            pass                       # nothing trusted: every request fails, as offline, rather than unchecked
+        _context = context
+    return _context
+
+
+def fetch(url: str, timeout: float = 6.0, limit: int = 65536, agent: str = "CardCopy") -> str:
+    """The text at url (an update feed). Raises OSError when it cannot be had."""
+    request = urllib.request.Request(url, headers={"User-Agent": agent, "Cache-Control": "no-cache"})
+    with urllib.request.urlopen(request, timeout=timeout, context=tls_context()) as response:
+        return response.read(limit).decode("utf-8", "replace")
 
 # Where latest.json lives: an asset of the newest GitHub release (scripts/release.ps1 uploads it). Empty = never check.
 # A Mac reads its own latest-mac.json beside it, whose "url" is the Mac download: a release without one is
@@ -121,7 +160,7 @@ def download(update: Update, into: str, on_progress: Callable[[int, int], None] 
                         else f"CardCopy-{update.version}-Setup{kind}")
     request = urllib.request.Request(update.zip_url, headers={"User-Agent": f"CardCopy/{update.version}"})
     digest = hashlib.sha256()
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout, context=tls_context()) as response:
         total = int(response.headers.get("Content-Length") or 0)
         done = 0
         with open(path, "xb") as out:
@@ -157,10 +196,7 @@ def check(current: str, url: str | None = None, timeout: float = 6.0, build: int
         if not feed or not _allowed(feed, allow_file=bool(override)):
             continue
         try:
-            request = urllib.request.Request(feed, headers={"User-Agent": f"CardCopy/{current}",
-                                                            "Cache-Control": "no-cache"})
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                raw = response.read(65536).decode("utf-8", "replace")
+            raw = fetch(feed, timeout, agent=f"CardCopy/{current}")
         except (OSError, ValueError):
             continue                      # offline, or a feed that does not exist (yet): say nothing
         update = parse(raw, current, allow_file=bool(override), current_build=build)

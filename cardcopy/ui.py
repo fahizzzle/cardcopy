@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import sys
 import threading
@@ -1901,6 +1902,14 @@ def _selftest(window: MainWindow, folder: str) -> None:
     """Save what the window looks like (and, on a Mac, the whole screen with its real title bar), then quit."""
     os.makedirs(folder, exist_ok=True)
     window.grab().save(os.path.join(folder, "app-window.png"))
+    feed = os.environ.get("CARDCOPY_SELFTEST_FEED")
+    if feed:                     # can this packaged copy really reach GitHub over HTTPS (its certificates)?
+        try:
+            answer = "ok " + json.dumps(json.loads(updates.fetch(feed, timeout=30)).get("version"))
+        except Exception as exc:
+            answer = f"FAILED {type(exc).__name__}: {exc}"
+        with open(os.path.join(folder, "update-check.txt"), "w", encoding="utf-8") as f:
+            f.write(answer + "\n")
     if sys.platform == "darwin":
         import subprocess
         subprocess.run(["screencapture", "-x", os.path.join(folder, "app-screen.png")], check=False, timeout=30)
