@@ -11,10 +11,13 @@ from .copier import FileEntry, walk_files
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".arw", ".cr2", ".cr3", ".nef", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw",
               ".tif", ".tiff"}   # files read_exif can name the camera from
-VIDEO_EXTS = {".mp4", ".mov", ".mxf", ".mts", ".m2ts", ".avi", ".braw", ".crm", ".r3d"}
-RAW_EXTS = {".arw", ".cr2", ".cr3", ".nef", ".nrw", ".dng", ".raf", ".orf", ".rw2", ".pef", ".srw", ".x3f",
-            ".3fr", ".iiq", ".rwl", ".srf", ".sr2"}
-JPEG_EXTS = {".jpg", ".jpeg", ".heic", ".heif", ".hif", ".tif", ".tiff", ".png"}   # the camera's processed pictures
+# .nev: Nikon N-RAW video; .insv: Insta360. Not here on purpose: low-resolution copies the cameras make for
+# previewing (GoPro .lrv, DJI .lrf), thumbnails (.thm) and subtitles of flight data (.srt).
+VIDEO_EXTS = {".mp4", ".mov", ".mxf", ".mts", ".m2ts", ".avi", ".braw", ".crm", ".r3d", ".nev", ".insv"}
+RAW_EXTS = {".arw", ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".dng", ".raf", ".orf", ".rw2", ".raw", ".pef", ".srw",
+            ".x3f", ".3fr", ".fff", ".iiq", ".mos", ".rwl", ".srf", ".sr2", ".gpr", ".erf", ".kdc", ".dcr", ".mef",
+            ".mrw", ".rwz"}                                                          # .gpr: GoPro RAW
+JPEG_EXTS = {".jpg", ".jpeg", ".heic", ".heif", ".hif", ".tif", ".tiff", ".png", ".insp"}   # processed pictures
 # Field recorders (Zoom, Tascam, Sound Devices, Zaxcom ...), and the voice memo some cameras write beside a photo.
 AUDIO_EXTS = {".wav", ".bwf", ".flac", ".aif", ".aiff", ".mp3", ".m4a", ".ogg", ".opus"}
 
@@ -61,6 +64,8 @@ class CardInfo:
 
 # Camera housekeeping that looks like media: clip thumbnails and proxy files.
 _NOT_MEDIA_DIRS = {"thmbnl", "sub", "private"}
+# Folders of proxies: low-resolution copies of the clips beside them (Sony SUB, Panasonic and Blackmagic Proxy).
+_PROXY_DIRS = {"sub", "proxy", "proxies"}
 
 
 def classify(rel: str) -> str | None:
@@ -68,7 +73,7 @@ def classify(rel: str) -> str | None:
     parts = rel.replace("/", "\\").lower().split("\\")
     ext = os.path.splitext(parts[-1])[1]
     if ext in VIDEO_EXTS:
-        return None if "sub" in parts[:-1] else "video"
+        return None if _PROXY_DIRS & set(parts[:-1]) else "video"
     if ext in AUDIO_EXTS:
         return None if _NOT_MEDIA_DIRS & set(parts[:-1]) else "audio"
     if ext in RAW_EXTS or ext in JPEG_EXTS:
@@ -282,6 +287,30 @@ def read_wav_info(path: str) -> CardInfo | None:
     return CardInfo(make=make if make.isupper() or make.istitle() else "", model=model)
 
 
+def wav_seconds(path: str) -> float | None:
+    """How long a WAV/BWF recording is, from its header (bytes per second and the size of its sound).
+    None when the file is not a WAV or its header cannot be read -- only the first 128 KB is looked at."""
+    try:
+        with open(path, "rb") as f:
+            buf = f.read(128 * 1024)
+            size = os.fstat(f.fileno()).st_size
+    except OSError:
+        return None
+    if buf[:4] != b"RIFF" or buf[8:12] != b"WAVE":
+        return None
+    pos, byte_rate = 12, 0
+    while pos + 8 <= len(buf):
+        name, length = buf[pos:pos + 4], int.from_bytes(buf[pos + 4:pos + 8], "little")
+        if name == b"fmt " and length >= 12:
+            byte_rate = int.from_bytes(buf[pos + 16:pos + 20], "little")     # after format, channels, rate
+        if name == b"data":
+            left = max(size - pos - 8, 0)                  # a recording cut short, or RF64 (size 0xFFFFFFFF)
+            sound = left if length in (0, 0xFFFFFFFF) else min(length, left)
+            return sound / byte_rate if byte_rate else None
+        pos += 8 + length + (length & 1)
+    return None
+
+
 def _first_audio(root: str) -> str | None:
     """The first recording on the card, preferring the folders recorders actually use."""
     likely = [os.path.join(root, name) for name in ("FOLDER01", "MUSIC", "RECORD", "AUDIO", "SD_CARD")]
@@ -320,10 +349,11 @@ def identify(root: str) -> CardInfo:
     return info or CardInfo()
 
 
-def scan(root: str, info: CardInfo | None = None) -> tuple[CardInfo, list[FileEntry]]:
-    """Full walk: fill in the counts. Returns the file list so the copy can reuse it."""
+def scan(root: str, info: CardInfo | None = None, stop=None) -> tuple[CardInfo, list[FileEntry]]:
+    """Full walk: fill in the counts. Returns the file list so the copy can reuse it. stop (a
+    threading.Event) ends the walk early; what was read so far is then incomplete and is not used."""
     info = info or identify(root)
-    files = list(walk_files(root))
+    files = list(walk_files(root, stop))
     tag_files(files)
     info.files = len(files)
     for name in ("raws", "jpegs", "videos", "audios", "xmls",

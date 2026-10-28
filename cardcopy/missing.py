@@ -16,9 +16,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .copier import Cancelled, FileEntry, _digest
+from .copier import Cancelled, FileEntry, _digest, same_file
 
-_SAME_MTIME = 3          # FAT keeps time in 2 second steps, so allow a little slack
 _VARIANTS = 64           # how far to follow "name (2).ext", "name (3).ext" ...
 
 
@@ -47,10 +46,11 @@ class Listing:
         return self._folders[key]
 
 
-def find_copy(dst: str, entry: FileEntry, listing: Listing | None = None) -> str | None:
+def find_copy(dst: str, entry: FileEntry, listing: Listing | None = None, src: str | None = None) -> str | None:
     """Where this exact file ended up, or None if it is not there.
 
-    A match needs the same name, the same SIZE and the same DATE; a name alone proves nothing. The
+    A match needs the same name, the same SIZE and the same DATE -- or, with src (the file on the card),
+    the same bytes when only the date has moved (copier.same_file); a name alone proves nothing. The
     project folder is part of dst, so the same file name under another project is a different path
     and is never looked at -- C0001.MP4 in Nour and C0001.MP4 in Rasheda cannot be mistaken.
 
@@ -67,7 +67,7 @@ def find_copy(dst: str, entry: FileEntry, listing: Listing | None = None) -> str
         if found is None:
             continue
         size, mtime, path = found
-        if size == entry.size and abs(mtime - entry.mtime) < _SAME_MTIME:
+        if same_file(path, size, mtime, entry, src):
             return path
     return None
 
@@ -128,11 +128,11 @@ def check_jobs(src_root: str, jobs: list[tuple[FileEntry, str]], *, deep: bool =
         if cancel is not None and cancel.is_set():
             gap.cancelled = True
             break
-        landed = find_copy(wanted, entry, listing)
+        landed = find_copy(wanted, entry, listing, os.path.join(src_root, entry.rel))
         if landed is None and spill_to is not None:
             elsewhere = spill_to(wanted)
             if elsewhere:
-                landed = find_copy(elsewhere, entry, listing)
+                landed = find_copy(elsewhere, entry, listing, os.path.join(src_root, entry.rel))
         if landed is None:
             gap.missing.append((entry.rel, entry.size))
         elif deep:

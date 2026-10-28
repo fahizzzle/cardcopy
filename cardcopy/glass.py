@@ -1,7 +1,8 @@
-"""The look: a dark sidebar, and a glass workspace (translucent panels over a glowing dark backdrop).
+"""The Windows look: a dark sidebar, and a glass workspace (translucent panels over a glowing dark backdrop).
 
 Everything is painted by hand: Qt stylesheets can do neither translucent gradients
-with hairline borders on arbitrary containers nor the backdrop glows.
+with hairline borders on arbitrary containers nor the backdrop glows. A Mac gets aqua.py instead, which
+offers the same names (theme.py picks one).
 """
 from __future__ import annotations
 
@@ -20,6 +21,55 @@ TEXT_SOFT = "#BEC0C9"
 M = 4                           # breathing room around buttons
 
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets").replace("\\", "/")
+NAME = "glass"
+
+# Label styles the window and the camera tiles share with the Mac look (aqua.STYLE has the same keys).
+STYLE = {
+    "bold": "font-weight: 600;",
+    "soft": f"color: {TEXT_SOFT};",
+    "detail": f"color: {TEXT_SOFT};",
+    "count": f"color: {TEXT}; font-size: 11pt; font-weight: 600;",
+    "count_off": f"color: {TEXT_SOFT}; font-size: 11pt; font-weight: 600;",
+    "status": f"color: {GREEN}; font-weight: 600;",
+    "camera_name": f"color: {TEXT}; font-size: 13pt; font-weight: 600;",
+    "link": (f"QPushButton {{ border: none; background: transparent; color: {TEXT_SOFT}; padding: 0;"
+             f" text-decoration: underline; }} QPushButton:hover {{ color: {ACCENT.name()}; }}"
+             f" QPushButton:disabled {{ color: rgba(255,255,255,0.25); }}"),
+    "scan": "color: rgba(255,255,255,0.45); padding: 0 6px;",
+    "empty": f"color: {TEXT_SOFT}; padding: 30px;",
+    "dialog_text": "font-size: 12pt;",
+    "dialog_title": "font-size: 14pt; font-weight: 600;",
+}
+
+
+def ink() -> str:
+    """The main text colour, for the odd bit of rich text that has to name it."""
+    return TEXT
+
+
+def mono_font(size: int) -> QFont:
+    return QFont("Consolas", size)
+
+
+def setup_window(window: QWidget) -> None:
+    window.setAttribute(Qt.WA_TranslucentBackground)   # the workspace is glass over the desktop
+    # frameless: Windows smears the native caption once blur-behind is on, so TitleStrip replaces it
+    window.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowMinMaxButtonsHint)
+
+
+def after_first_show(window) -> None:
+    """Needs the native window, so not before the first show."""
+    window.workspace.see_through = enable_blur_behind(window)
+    window.workspace.update()
+
+
+def progress_badge(percent: int | None) -> None:
+    """The Dock shows a copy's progress on a Mac; the Windows taskbar is left alone."""
+
+
+def install(app) -> None:
+    app.setStyle("Fusion")
+    app.setStyleSheet(app_stylesheet())
 
 
 class Glide:
@@ -416,6 +466,9 @@ class Toggle(QCheckBox):
         p.end()
 
 
+Check = Toggle          # the Mac look draws ticks as check boxes; here every on/off is a switch
+
+
 class ProgressBar(QWidget):
     """Same calls as the QProgressBar it replaces."""
 
@@ -568,6 +621,9 @@ class NavButton(QPushButton):
         super().leaveEvent(event)
 
 
+ActionButton = NavButton    # Refresh / Add folder / Eject: sidebar entries here, toolbar buttons on a Mac
+
+
 class Logo(QWidget):
     def __init__(self, text: str) -> None:
         super().__init__()
@@ -652,4 +708,14 @@ def app_stylesheet() -> str:
     QDialog QPushButton:default {{ background: {accent}; border-color: {accent}; color: white; }}
     QDialog QLineEdit {{ background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.18); border-radius: 10px;
                          padding: 6px 10px; color: {text}; }}
+    QTreeWidget {{ background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px;
+                   color: {text}; outline: none; selection-background-color: rgba(255,91,58,0.35);
+                   selection-color: white; }}
+    QTreeWidget::item {{ padding: 3px 2px; }}
+    QTreeWidget::indicator {{ width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.45);
+                              background: rgba(255,255,255,0.06); }}
+    QTreeWidget::indicator:checked {{ background: {accent}; border-color: {accent};
+                                      image: url("{ASSETS}/check-white.png"); }}
+    QHeaderView::section {{ background: transparent; color: {TEXT_SOFT}; border: none;
+                            border-bottom: 1px solid rgba(255,255,255,0.12); padding: 5px 8px; }}
     """

@@ -5,14 +5,20 @@ the destination. Cards are opened read-only; tests/test_cardcopy.py enforces all
 """
 from __future__ import annotations
 
+import ctypes
 import errno
 import hashlib
 import os
+import sys
 import threading
 from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
-SKIP_DIRS = {"system volume information", "$recycle.bin", ".trashes", ".spotlight-v100", ".fseventsd"}
+SKIP_DIRS = {"system volume information", "$recycle.bin", ".trashes", ".spotlight-v100", ".fseventsd",
+             ".temporaryitems", ".documentrevisions-v100"}
+# A Mac that has had the card mounted leaves "._C0001.MP4" (the clip's Finder metadata, a few KB) beside
+# every file, and a .DS_Store in every folder. They are not footage, whatever their extension says.
+SKIP_FILES = {".ds_store"}
 CHUNK = 4 * 1024 * 1024
 GIVE_UP_AFTER = 3      # device errors in a row before a card is treated as gone
 # Windows raises these two when a disk fills up: ERROR_HANDLE_DISK_FULL and ERROR_DISK_FULL.
@@ -40,7 +46,7 @@ def explain(exc: OSError, src_root: str) -> str:
     "[Errno 22] Invalid argument" is true and useless. The same error means "your card reader just
     dropped the card", which is something you can act on.
     """
-    if not device_lost(exc):
+    if not device_lost(exc) and os.path.isdir(src_root):
         return str(exc)
     if not os.path.isdir(src_root):
         return f"{exc} - the card is no longer there; check the reader, cable or USB port"
@@ -84,10 +90,15 @@ class CopyResult:
     records: list[FileRecord] = field(default_factory=list)   # one per file dealt with
 
 
-def walk_files(root: str) -> Iterator[FileEntry]:
-    """Every file on the card, relative to its root, skipping OS housekeeping folders."""
+def walk_files(root: str, stop: threading.Event | None = None) -> Iterator[FileEntry]:
+    """Every file on the card, relative to its root, skipping OS housekeeping folders.
+
+    stop ends the walk early (the window sets it before ejecting, so CardCopy itself is not the reader
+    that keeps a card busy)."""
     stack = [root]
     while stack:
+        if stop is not None and stop.is_set():
+            return
         folder = stack.pop()
         try:
             entries = sorted(os.scandir(folder), key=lambda e: e.name.lower())
@@ -99,6 +110,8 @@ def walk_files(root: str) -> Iterator[FileEntry]:
                     if entry.name.lower() not in SKIP_DIRS:
                         stack.append(entry.path)
                 elif entry.is_file(follow_symlinks=False):
+                    if entry.name.startswith("._") or entry.name.lower() in SKIP_FILES:
+                        continue
                     st = entry.stat()
                     yield FileEntry(os.path.relpath(entry.path, root), st.st_size, st.st_mtime)
             except OSError:
@@ -120,14 +133,52 @@ def partial_path(dst: str, entry: FileEntry) -> str:
     return f"{dst}.{entry.size}-{int(entry.mtime)}.partial"
 
 
+_RENAME_EXCL = 0x00000004       # <sys/stdio.h>: renamex_np fails with EEXIST instead of replacing
+_libc = None
+
+
+def _exclusive_rename(src: str, dst: str) -> bool:
+    """macOS: rename that fails rather than replace. False when the file system cannot do one."""
+    global _libc
+    if sys.platform != "darwin":
+        return False
+    if _libc is None:
+        _libc = ctypes.CDLL(None, use_errno=True)
+        _libc.renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        _libc.renamex_np.restype = ctypes.c_int
+    if _libc.renamex_np(os.fsencode(src), os.fsencode(dst), _RENAME_EXCL) == 0:
+        return True
+    err = ctypes.get_errno()
+    if err in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.EINVAL, errno.ENOSYS):
+        return False                # exFAT, FAT, a network share: no exclusive rename there
+    raise OSError(err, os.strerror(err), dst)
+
+
+def rename_new(src: str, dst: str) -> None:
+    """Rename src to dst, and refuse (FileExistsError) if anything is already at dst.
+
+    Windows' rename refuses by itself. A POSIX rename silently REPLACES the destination, so on a Mac
+    the kernel is asked for an exclusive rename; where the file system cannot do one, dst is checked
+    first. Claims gives each name to one card thread, so nothing in CardCopy can race that check.
+    """
+    if os.name == "nt":
+        os.rename(src, dst)
+        return
+    if _exclusive_rename(src, dst):
+        return
+    if os.path.lexists(dst):
+        raise FileExistsError(errno.EEXIST, "already exists; left untouched", dst)
+    os.rename(src, dst)
+
+
 def _copy_file(src: str, dst: str, entry: FileEntry, verify: bool,
                cancel: threading.Event | None, on_bytes: Callable[[int], None]) -> str:
     """Copy src to dst without ever deleting or overwriting a file. Returns the file's MD5 when verify is on.
 
     The source is only read. Data goes into a .partial file that is renamed to
     dst once complete; a cancelled or failed copy leaves the .partial behind and
-    the next run carries on from where it stopped. os.rename refuses to replace
-    an existing file on Windows, so nothing already at the destination can be lost.
+    the next run carries on from where it stopped. rename_new refuses to replace
+    an existing file (on Windows and on a Mac), so nothing already at the destination can be lost.
     """
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     part = partial_path(dst, entry)
@@ -168,14 +219,63 @@ def _copy_file(src: str, dst: str, entry: FileEntry, verify: bool,
     if problem:
         bad = part + ".bad"   # set aside, not deleted, so the next run starts this file afresh
         if not os.path.exists(bad):
-            os.rename(part, bad)
+            rename_new(part, bad)
         raise OSError(f"{problem}; the faulty copy was kept as {os.path.basename(bad)}")
     try:
         os.utime(part, (entry.mtime, entry.mtime))
     except OSError:
         pass
-    os.rename(part, dst)
+    rename_new(part, dst)
     return digest
+
+
+SAMPLE = 256 * 1024
+
+
+def same_bytes(a: str, b: str, sample: int = SAMPLE) -> bool:
+    """Do two files of one size hold the same bytes? Their start, middle and end are compared (3 x 256 KB):
+    enough to tell two different photos or clips apart, for a fraction of reading both. Reads only."""
+    try:
+        size = os.path.getsize(a)
+        if size != os.path.getsize(b):
+            return False
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            for at in sorted({0, max(size // 2 - sample // 2, 0), max(size - sample, 0)}):
+                fa.seek(at)
+                fb.seek(at)
+                if fa.read(sample) != fb.read(sample):
+                    return False
+        return True
+    except OSError:
+        return False
+
+
+def same_file(path: str, size: int, mtime: float, entry: FileEntry, src: str | None = None) -> bool:
+    """Is the file at path (this size, this time) the card's file? The same size and time counts (FAT keeps
+    time in 2 s steps). So does the same size at another time when the bytes match: a copy whose date moved
+    afterwards -- Google Drive, a time-zone or daylight-saving change -- is still that file, and copying it
+    again would only make a duplicate "(2)". A different photo of the same name and size is not the same."""
+    if size != entry.size:
+        return False
+    if abs(mtime - entry.mtime) < 3:
+        return True
+    return bool(src) and same_bytes(src, path)
+
+
+def find_existing(dst: str, entry: FileEntry, src: str | None = None) -> str | None:
+    """Where this file already is at dst, or among the "name (2).ext" ... copies beside it; None if nowhere."""
+    if not dst or not os.path.isdir(os.path.dirname(dst)):
+        return None
+    base, ext = os.path.splitext(dst)
+    for n in range(1, 65):
+        cand = dst if n == 1 else f"{base} ({n}){ext}"
+        try:
+            st = os.stat(cand)
+        except OSError:
+            return None                       # copies are named in order: the first gap ends the ladder
+        if same_file(cand, st.st_size, st.st_mtime, entry, src):
+            return cand
+    return None
 
 
 class Claims:
@@ -194,8 +294,10 @@ class Claims:
     def _same(size: int, mtime: float, entry: FileEntry) -> bool:
         return size == entry.size and abs(mtime - entry.mtime) < 3  # FAT keeps 2 s steps
 
-    def resolve(self, dst: str, entry: FileEntry) -> tuple[str, bool]:
-        """(path to write, already there). Never returns a path holding a different file."""
+    def resolve(self, dst: str, entry: FileEntry, src: str | None = None) -> tuple[str, bool]:
+        """(path to write, already there). Never returns a path holding a different file.
+
+        src, the file on the card, lets a copy whose date has moved since be recognised (same_file)."""
         base, ext = os.path.splitext(dst)
         n = 1
         with self._lock:
@@ -207,7 +309,7 @@ class Claims:
                         return cand, True
                 elif os.path.isfile(cand):
                     st = os.stat(cand)
-                    if self._same(st.st_size, st.st_mtime, entry):
+                    if same_file(cand, st.st_size, st.st_mtime, entry, src):
                         return cand, True
                 else:
                     self._taken[key] = (entry.size, entry.mtime)
@@ -264,15 +366,22 @@ def copy_files(src_root: str, jobs: list[tuple[FileEntry, str]], *, verify: bool
             break
         before = done
         try:
+            src = os.path.join(src_root, entry.rel)
             planned = wanted
             if spilling and spill_to is not None:
                 planned = spill_to(wanted) or wanted
-            dst, present = claims.resolve(planned, entry)
+            dst, present = claims.resolve(planned, entry, src)
+            if not present and not spilling and spill_to is not None:
+                # an earlier run that filled the Raw folder put this file in the backup folder: it is copied
+                # already, and copying it again into the Raw folder would only make a second one
+                kept = find_existing(spill_to(wanted) or "", entry, src)
+                if kept:
+                    claims.release(dst)
+                    dst, present = kept, True
             digest, skipped = "", present
             while not skipped:
                 try:
-                    digest = _copy_file(os.path.join(src_root, entry.rel), dst, entry, verify, cancel,
-                                        lambda n: report(n, entry.rel))
+                    digest = _copy_file(src, dst, entry, verify, cancel, lambda n: report(n, entry.rel))
                     break
                 except OSError as exc:
                     if not is_disk_full(exc):
@@ -285,7 +394,7 @@ def copy_files(src_root: str, jobs: list[tuple[FileEntry, str]], *, verify: bool
                         # what is already in the full folder stays exactly as it is, .partial and all
                         claims.release(dst)
                         spilling = True
-                        dst, present = claims.resolve(elsewhere, entry)
+                        dst, present = claims.resolve(elsewhere, entry, src)
                         skipped = present
                         continue
                     if wait_for_space is None or not wait_for_space(entry.size, entry.rel, dst):
@@ -306,11 +415,12 @@ def copy_files(src_root: str, jobs: list[tuple[FileEntry, str]], *, verify: bool
             result.errors.append(f"{entry.rel}: {why}")
             result.records.append(FileRecord(entry.rel, wanted, entry.size, f"ERROR: {why}"))
             report(before + entry.size - done, entry.rel)  # keep the bar honest
-            if device_lost(exc):
+            if device_lost(exc) or not os.path.isdir(src_root):
                 # The card has gone, or the reader has stopped answering for it. Trying the rest one
                 # at a time only fills the log with the same failure hundreds of times over; say it
                 # once and stop. A reader can keep the drive letter visible while every read fails,
                 # so a run of these counts as gone even when the folder still seems to be there.
+                # (A Mac unmounts a pulled card at once: its files then fail with "no such file".)
                 lost += 1
                 if not os.path.isdir(src_root) or lost >= GIVE_UP_AFTER:
                     left = len(jobs) - jobs.index((entry, wanted)) - 1

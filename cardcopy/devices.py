@@ -1,4 +1,4 @@
-"""Find the SD card volumes that are plugged in (Windows). No Qt in here."""
+"""Find the SD card volumes that are plugged in (Windows; a Mac uses mac/devices.py). No Qt in here."""
 from __future__ import annotations
 
 import ctypes
@@ -7,9 +7,11 @@ import os
 import re
 import string
 import subprocess
-from dataclasses import dataclass
+import sys
+from dataclasses import dataclass, field
 
 DRIVE_REMOVABLE = 2
+DRIVE_FIXED = 3
 DRIVE_FOLDER = -1  # a plain folder added by hand
 
 # A volume with one of these at its root is treated as a camera card even
@@ -33,10 +35,17 @@ class Volume:
     model: str = ""      # disk model from Windows ("Sony ILCE-7M4 USB Device")
     device_key: str = "" # same for every card slot of one USB device
     lun: int | None = None
+    facts: dict = field(default_factory=dict)   # what else the system says about it (a Mac's diskutil details)
 
     @property
     def letter(self) -> str:
-        return self.root[:2] if self.drive_type != DRIVE_FOLDER else ""
+        """What the card is called in the window and the log: "E:" on Windows, the volume's name
+        under /Volumes on a Mac ("Untitled 1"). Empty for a folder added by hand."""
+        if self.drive_type == DRIVE_FOLDER:
+            return ""
+        if sys.platform == "darwin":
+            return os.path.basename(self.root.rstrip("/")) or self.root
+        return self.root[:2]
 
     @property
     def key(self) -> str:
@@ -90,7 +99,16 @@ def is_card(volume: Volume) -> bool:
         return False
     if volume.drive_type == DRIVE_REMOVABLE:
         return True
+    if named_like_a_recorder(volume):
+        return True
     return any(os.path.isdir(os.path.join(volume.root, m)) for m in CARD_MARKERS)
+
+
+def named_like_a_recorder(volume: Volume) -> bool:
+    """A recorder or wireless mic plugged in by USB ("DJI_MIC2", "ZOOM F6"): its built-in storage may call
+    itself a fixed disk, and holds no camera folders, but it is a card to copy all the same."""
+    from .cameras import is_audio_device          # here, not at the top: cameras imports this module
+    return is_audio_device(volume.label) or is_audio_device(volume.model)
 
 
 def folder_volume(path: str) -> Volume:
@@ -201,3 +219,7 @@ def eject_volume(root: str, tries: int = 10) -> tuple[bool, str]:
         return True, "dismounted, safe to remove"    # some readers cannot eject media; flushed and offline is enough
     finally:
         k.CloseHandle(wintypes.HANDLE(handle))
+
+
+if sys.platform == "darwin":                                 # the same calls, answered by diskutil and ioreg
+    from .mac.devices import drive_mask, eject_volume, find_cards, is_card, list_volumes  # noqa: E402,F401,F811
