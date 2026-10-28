@@ -349,10 +349,11 @@ def identify(root: str) -> CardInfo:
     return info or CardInfo()
 
 
-def scan(root: str, info: CardInfo | None = None) -> tuple[CardInfo, list[FileEntry]]:
-    """Full walk: fill in the counts. Returns the file list so the copy can reuse it."""
+def scan(root: str, info: CardInfo | None = None, stop=None) -> tuple[CardInfo, list[FileEntry]]:
+    """Full walk: fill in the counts. Returns the file list so the copy can reuse it. stop (a
+    threading.Event) ends the walk early; what was read so far is then incomplete and is not used."""
     info = info or identify(root)
-    files = list(walk_files(root))
+    files = list(walk_files(root, stop))
     tag_files(files)
     info.files = len(files)
     for name in ("raws", "jpegs", "videos", "audios", "xmls",

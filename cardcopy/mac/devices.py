@@ -202,15 +202,31 @@ def ejectable(volume: Volume) -> bool:
     return volume.drive_type == DRIVE_REMOVABLE or bool(facts.get("ejectable")) or not facts.get("internal", True)
 
 
-def _holder(text: str) -> str:
-    """The app diskutil says is keeping a disk busy ("dissented by PID 812 (Photos)"), or ''."""
+def _holder(text: str) -> tuple[str, int]:
+    """(name, pid) of what diskutil says is keeping a disk busy ("dissented by PID 812 (Photos)"); ('', 0)."""
     m = re.search(r"dissented by PID (\d+)(?: \(([^)]+)\))?", text)
     if not m:
-        return ""
+        return "", 0
+    pid = int(m.group(1))
     if m.group(2):
-        return os.path.basename(m.group(2))
+        return os.path.basename(m.group(2)), pid
     out = _run(["ps", "-p", m.group(1), "-o", "comm="], 5).decode("utf-8", "replace").strip()
-    return os.path.basename(out) or f"process {m.group(1)}"
+    return os.path.basename(out) or f"process {pid}", pid
+
+
+def _spotlight(name: str) -> bool:
+    return name.startswith(("mds", "mdworker")) or name in ("mdsync", "Spotlight")
+
+
+def busy_message(name: str, pid: int) -> str:
+    """Why a card would not eject, and what to do, in words."""
+    if pid == os.getpid():
+        return "CardCopy was still reading it: press Eject again"
+    if _spotlight(name):
+        return "Spotlight is still indexing it (macOS does this with every new card): wait a minute and eject again"
+    if pid == 0 or name == "kernel_task":
+        return "macOS is still finishing with it: wait a moment and eject again"
+    return f"{name} is using it: quit {name} (or close its window) and eject again"
 
 
 def eject_volume(root: str, tries: int = 4) -> tuple[bool, str]:
@@ -234,8 +250,11 @@ def eject_volume(root: str, tries: int = 4) -> tuple[bool, str]:
     whole = volume.facts["whole"] or volume.facts["bsd"]
     if not re.fullmatch(r"disk\d+(s\d+)?", whole):
         return False, "not a disk"
-    text = ""
-    for attempt in range(tries):                 # Spotlight or a preview may still be reading: give it a moment
+    text, name, pid = "", "", 0
+    deadline = time.monotonic() + 45                # Spotlight indexing a new card lets go by itself: wait for it
+    attempt = 0
+    while True:
+        attempt += 1
         try:
             out = subprocess.run(["diskutil", "eject", whole], capture_output=True, text=True, timeout=90,
                                  stdin=subprocess.DEVNULL)
@@ -246,11 +265,13 @@ def eject_volume(root: str, tries: int = 4) -> tuple[bool, str]:
         if not os.path.ismount(root):
             return True, "ejected, safe to remove"         # the volume went even though diskutil complained
         text = f"{out.stdout}\n{out.stderr}".strip()
-        if attempt + 1 < tries:
-            time.sleep(1.5)
-    holder = _holder(text)
-    if holder:
-        return False, f"{holder} is using it: quit {holder} (or close its window) and eject again"
+        name, pid = _holder(text)
+        waiting = _spotlight(name) and time.monotonic() < deadline
+        if attempt >= tries and not waiting:
+            break
+        time.sleep(3.0 if waiting else 1.5)
+    if name:
+        return False, busy_message(name, pid)
     if re.search(r"dissent|in use|busy|could not be unmounted", text, re.I):
         return False, "still in use by another app (close Finder windows or players showing it)"
     lines = text.splitlines()

@@ -90,10 +90,15 @@ class CopyResult:
     records: list[FileRecord] = field(default_factory=list)   # one per file dealt with
 
 
-def walk_files(root: str) -> Iterator[FileEntry]:
-    """Every file on the card, relative to its root, skipping OS housekeeping folders."""
+def walk_files(root: str, stop: threading.Event | None = None) -> Iterator[FileEntry]:
+    """Every file on the card, relative to its root, skipping OS housekeeping folders.
+
+    stop ends the walk early (the window sets it before ejecting, so CardCopy itself is not the reader
+    that keeps a card busy)."""
     stack = [root]
     while stack:
+        if stop is not None and stop.is_set():
+            return
         folder = stack.pop()
         try:
             entries = sorted(os.scandir(folder), key=lambda e: e.name.lower())

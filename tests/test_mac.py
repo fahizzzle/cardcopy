@@ -216,3 +216,25 @@ def test_a_wireless_mic_whose_storage_calls_itself_fixed_is_still_listed(tmp_pat
     other = mac_devices.volume_from_info(str(tmp_path), {**SD_CARD, "VolumeName": "Backup", "RemovableMedia": False,
                                                          "Removable": False, "MediaName": "Samsung T7"})
     assert not mac_devices.is_card(other)
+
+
+def test_busy_messages_say_what_to_do():
+    assert mac_devices.busy_message("mds_stores", 120).startswith("Spotlight is still indexing it")
+    assert mac_devices.busy_message("CardCopy", os.getpid()).startswith("CardCopy was still reading it")
+    assert mac_devices.busy_message("kernel_task", 0).startswith("macOS is still finishing")
+    assert mac_devices.busy_message("QuickTime Player", 812).startswith("QuickTime Player is using it")
+
+
+def test_eject_waits_for_spotlight_to_let_go(monkeypatch, tmp_path):
+    monkeypatch.delenv("CARDCOPY_NO_DEVICES", raising=False)
+    monkeypatch.setattr(mac_devices.os.path, "ismount", lambda p: True)
+    monkeypatch.setattr(mac_devices, "disk_info", lambda root: SD_CARD)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    answers = iter([1, 1, 1, 1, 1, 0])                       # Spotlight holds it for a while, then lets go
+
+    class Out:
+        def __init__(self):
+            self.returncode = next(answers)
+            self.stdout, self.stderr = "", "Unmount was dissented by PID 120 (mds_stores)"
+    monkeypatch.setattr(mac_devices.subprocess, "run", lambda args, **k: Out())
+    assert mac_devices.eject_volume(str(tmp_path), tries=2) == (True, "ejected, safe to remove")

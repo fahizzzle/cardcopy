@@ -228,6 +228,35 @@ def test_the_computer_stays_awake_while_cardcopy_is_open(app, tmp_path, monkeypa
         window.close()
 
 
+def test_no_card_is_read_while_cards_are_being_ejected(app, tmp_path, monkeypatch):
+    """Each card that goes used to start a new read of the others, and a card being read cannot be ejected."""
+    from cardcopy.cameras import Card
+    from cardcopy.devices import DRIVE_REMOVABLE, Volume
+    window = _window(tmp_path, monkeypatch, "glass")
+    try:
+        (tmp_path / "card2").mkdir()
+        window.cards = [Card(Volume(root=str(tmp_path / "card2"), label="X", drive_type=DRIVE_REMOVABLE))]
+        window.base_edit.setText("")                             # no Raw folder to keep connected
+        seen = []
+
+        def eject(root):
+            seen.append((window.ejecting, window._scan_stop.is_set()))
+            generation = window.generation
+            window.refresh()                                     # a card going: would have read the rest
+            window._poll_drives()
+            seen.append(window.generation == generation)
+            return True, "ejected, safe to remove"
+        window.eject_volume = eject
+        window._eject_all()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and window.ejecting:
+            QApplication.processEvents()
+            time.sleep(0.02)
+        assert seen == [(True, True), True] and not window.ejecting
+    finally:
+        window.close()
+
+
 def test_mac_appearance_switches_palette(app, monkeypatch):
     from cardcopy import aqua
     monkeypatch.setenv("CARDCOPY_APPEARANCE", "dark")

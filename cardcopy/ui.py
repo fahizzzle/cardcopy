@@ -118,6 +118,9 @@ class MainWindow(QMainWindow):
         self.keep_awake = power.keep_awake       # replaced in tests
         self.eject_volume = eject_volume         # replaced in tests
         self._after_eject = None
+        self.ejecting = False                  # cards are being ejected: no new reads of them meanwhile
+        self._scan_stop = threading.Event()    # set: the read in progress stops at the next folder
+        self._scan_lock = threading.Lock()     # held while the cards are being read
         self.awake = False
         self._build()
         self._connect()
@@ -559,20 +562,29 @@ class MainWindow(QMainWindow):
 
     def _poll_drives(self) -> None:
         mask = drive_mask()
-        if mask != self.mask and not self.copying:
+        # not while ejecting: each card that goes would start a new read of the ones still there, and a card
+        # CardCopy is reading cannot be ejected (macOS: "in use") -- the eject refreshes once it has finished
+        if mask != self.mask and not self.copying and not self.ejecting:
             self.mask = mask
             self.refresh()
 
     def refresh(self) -> None:
-        if self.copying:
+        if self.copying or self.ejecting:
             return
         self.generation += 1
         self.scanning = True
         self.scan_label.setText("Looking for cards…")
         folders = list(self.settings["folders"])
-        threading.Thread(target=self._scan_worker, args=(self.generation, folders), daemon=True).start()
+        self._scan_stop.set()                       # a read still going from the last refresh: no longer wanted
+        self._scan_stop = threading.Event()
+        threading.Thread(target=self._scan_worker, args=(self.generation, folders, self._scan_stop),
+                         daemon=True).start()
 
-    def _scan_worker(self, gen: int, folders: list[str]) -> None:
+    def _scan_worker(self, gen: int, folders: list[str], stop: threading.Event) -> None:
+        with self._scan_lock:                       # one reader of the cards at a time; Eject waits on it
+            self._scan_cards(gen, folders, stop)
+
+    def _scan_cards(self, gen: int, folders: list[str], stop: threading.Event) -> None:
         try:
             # CARDCOPY_NO_DEVICES: tests use folder sources only and must never touch a real card
             volumes = [] if os.environ.get("CARDCOPY_NO_DEVICES") else find_cards()
@@ -589,8 +601,10 @@ class MainWindow(QMainWindow):
                 self.signals.log.emit(f"{card.volume.root}: could not identify the device ({exc})")
 
         def full(card: Card) -> None:
+            if stop.is_set():
+                return
             try:
-                _, card.files = scan(card.volume.root, card.info)
+                _, card.files = scan(card.volume.root, card.info, stop)
             except Exception as exc:
                 self.signals.log.emit(f"{card.volume.root}: scan failed ({exc})")
             self.signals.card_scanned.emit(gen, card.key)
@@ -1903,8 +1917,14 @@ class MainWindow(QMainWindow):
         self._after_eject = then
         self.eject_btn.setEnabled(False)
         self._log("Ejecting " + ", ".join(c.volume.letter for c in self._real_cards() if c.volume.root in roots) + "…")
+        # CardCopy must not be the one keeping a card busy: stop any read of the cards, let it finish,
+        # and start none until every card has been dealt with (see _poll_drives)
+        self.ejecting = True
+        self._scan_stop.set()
 
         def work() -> None:
+            if self._scan_lock.acquire(timeout=30):
+                self._scan_lock.release()
             self.signals.ejected.emit([(root, *self.eject_volume(root)) for root in roots])
 
         threading.Thread(target=work, daemon=True).start()
@@ -1913,6 +1933,8 @@ class MainWindow(QMainWindow):
         for root, ok, message in results:
             name = os.path.basename(root.rstrip("/")) if MAC else root[:2]
             self._log(f"{name}  {message}" if ok else f"{name}  NOT ejected: {message}")
+        self.ejecting = False
+        self.mask = drive_mask()
         self.eject_btn.setEnabled(not self.copying)
         self.refresh()
         then, self._after_eject = self._after_eject, None
