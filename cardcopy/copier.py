@@ -224,6 +224,55 @@ def _copy_file(src: str, dst: str, entry: FileEntry, verify: bool,
     return digest
 
 
+SAMPLE = 256 * 1024
+
+
+def same_bytes(a: str, b: str, sample: int = SAMPLE) -> bool:
+    """Do two files of one size hold the same bytes? Their start, middle and end are compared (3 x 256 KB):
+    enough to tell two different photos or clips apart, for a fraction of reading both. Reads only."""
+    try:
+        size = os.path.getsize(a)
+        if size != os.path.getsize(b):
+            return False
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            for at in sorted({0, max(size // 2 - sample // 2, 0), max(size - sample, 0)}):
+                fa.seek(at)
+                fb.seek(at)
+                if fa.read(sample) != fb.read(sample):
+                    return False
+        return True
+    except OSError:
+        return False
+
+
+def same_file(path: str, size: int, mtime: float, entry: FileEntry, src: str | None = None) -> bool:
+    """Is the file at path (this size, this time) the card's file? The same size and time counts (FAT keeps
+    time in 2 s steps). So does the same size at another time when the bytes match: a copy whose date moved
+    afterwards -- Google Drive, a time-zone or daylight-saving change -- is still that file, and copying it
+    again would only make a duplicate "(2)". A different photo of the same name and size is not the same."""
+    if size != entry.size:
+        return False
+    if abs(mtime - entry.mtime) < 3:
+        return True
+    return bool(src) and same_bytes(src, path)
+
+
+def find_existing(dst: str, entry: FileEntry, src: str | None = None) -> str | None:
+    """Where this file already is at dst, or among the "name (2).ext" ... copies beside it; None if nowhere."""
+    if not dst or not os.path.isdir(os.path.dirname(dst)):
+        return None
+    base, ext = os.path.splitext(dst)
+    for n in range(1, 65):
+        cand = dst if n == 1 else f"{base} ({n}){ext}"
+        try:
+            st = os.stat(cand)
+        except OSError:
+            return None                       # copies are named in order: the first gap ends the ladder
+        if same_file(cand, st.st_size, st.st_mtime, entry, src):
+            return cand
+    return None
+
+
 class Claims:
     """Destination names handed out during one run, shared by the card threads.
 
@@ -240,8 +289,10 @@ class Claims:
     def _same(size: int, mtime: float, entry: FileEntry) -> bool:
         return size == entry.size and abs(mtime - entry.mtime) < 3  # FAT keeps 2 s steps
 
-    def resolve(self, dst: str, entry: FileEntry) -> tuple[str, bool]:
-        """(path to write, already there). Never returns a path holding a different file."""
+    def resolve(self, dst: str, entry: FileEntry, src: str | None = None) -> tuple[str, bool]:
+        """(path to write, already there). Never returns a path holding a different file.
+
+        src, the file on the card, lets a copy whose date has moved since be recognised (same_file)."""
         base, ext = os.path.splitext(dst)
         n = 1
         with self._lock:
@@ -253,7 +304,7 @@ class Claims:
                         return cand, True
                 elif os.path.isfile(cand):
                     st = os.stat(cand)
-                    if self._same(st.st_size, st.st_mtime, entry):
+                    if same_file(cand, st.st_size, st.st_mtime, entry, src):
                         return cand, True
                 else:
                     self._taken[key] = (entry.size, entry.mtime)
@@ -310,15 +361,22 @@ def copy_files(src_root: str, jobs: list[tuple[FileEntry, str]], *, verify: bool
             break
         before = done
         try:
+            src = os.path.join(src_root, entry.rel)
             planned = wanted
             if spilling and spill_to is not None:
                 planned = spill_to(wanted) or wanted
-            dst, present = claims.resolve(planned, entry)
+            dst, present = claims.resolve(planned, entry, src)
+            if not present and not spilling and spill_to is not None:
+                # an earlier run that filled the Raw folder put this file in the backup folder: it is copied
+                # already, and copying it again into the Raw folder would only make a second one
+                kept = find_existing(spill_to(wanted) or "", entry, src)
+                if kept:
+                    claims.release(dst)
+                    dst, present = kept, True
             digest, skipped = "", present
             while not skipped:
                 try:
-                    digest = _copy_file(os.path.join(src_root, entry.rel), dst, entry, verify, cancel,
-                                        lambda n: report(n, entry.rel))
+                    digest = _copy_file(src, dst, entry, verify, cancel, lambda n: report(n, entry.rel))
                     break
                 except OSError as exc:
                     if not is_disk_full(exc):
@@ -331,7 +389,7 @@ def copy_files(src_root: str, jobs: list[tuple[FileEntry, str]], *, verify: bool
                         # what is already in the full folder stays exactly as it is, .partial and all
                         claims.release(dst)
                         spilling = True
-                        dst, present = claims.resolve(elsewhere, entry)
+                        dst, present = claims.resolve(elsewhere, entry, src)
                         skipped = present
                         continue
                     if wait_for_space is None or not wait_for_space(entry.size, entry.rel, dst):
